@@ -29,16 +29,22 @@ fi
 
 ROS_SETUP="/opt/ros/${ROS_DISTRO_NAME}/setup.bash"
 if [[ -f "${ROS_SETUP}" ]]; then
+  set +u
   source "${ROS_SETUP}"
+  set -u
 fi
 
 ZLAB_ROBOTS_WS="${ZLAB_ROBOTS_WS:-${HOME}/zlab_robots}"
 if [[ -f "${ZLAB_ROBOTS_WS}/devel/setup.bash" ]]; then
+  set +u
   source "${ZLAB_ROBOTS_WS}/devel/setup.bash"
+  set -u
 fi
 
 if [[ -f "${WS_ROOT}/devel/setup.bash" ]]; then
+  set +u
   source "${WS_ROOT}/devel/setup.bash"
+  set -u
 fi
 
 if ! command -v rostopic >/dev/null 2>&1; then
@@ -59,9 +65,17 @@ cleanup() {
     echo
     echo "Stopping active recording..."
     publish_trigger false || true
+    recording=0
   fi
 }
-trap cleanup EXIT INT TERM
+
+handle_signal() {
+  cleanup
+  exit 130
+}
+
+trap cleanup EXIT
+trap handle_signal INT TERM
 
 echo "Manual recorder control"
 echo "Topic: ${TOPIC}"
@@ -70,12 +84,12 @@ echo
 
 run_index=1
 while true; do
-  read -r -p "[${run_index}] Press Enter to START recording..."
+  read -r -p "[${run_index}] Press Enter to START recording..." || exit 0
   publish_trigger true
   recording=1
   echo "[${run_index}] Recording."
 
-  read -r -p "[${run_index}] Press Enter to STOP recording..."
+  read -r -p "[${run_index}] Press Enter to STOP recording..." || exit 0
   publish_trigger false
   recording=0
   echo "[${run_index}] Stopped."
