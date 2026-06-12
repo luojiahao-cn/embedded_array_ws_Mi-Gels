@@ -7,6 +7,8 @@ DEFAULT_RUNTIME_CONFIG = {
     "startup_strategy": "cont",
     "startup_sensors": "auto",
     "trigger_rate_hz": 100,
+    "icm_rate_hz": 480,
+    "profile": "LOW_NOISE",
     "port": "auto",
     "baudrate": 115200,
 }

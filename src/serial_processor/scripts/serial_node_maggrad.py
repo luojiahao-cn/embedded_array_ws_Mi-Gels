@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Serial bridge for STM32 magnetometer/IMU binary streams.
 
-This node parses the USB CDC binary stream used by MagGrad_Dual_V1 and
-STM32H7_Sensor_V1:
+This node parses the USB CDC binary stream used by MagGrad_AK_TMAG_V1 and
+MagGrad_QMC_V1:
   sync(0xA5 0x5A) + version + type + seq + tick_ms + payload_len + payload + crc16
 
 It publishes magnetometer array snapshots as the existing StmUplink messages
@@ -58,10 +58,106 @@ class MagGradProtocol:
         return crc
 
 
+MAGGRAD_PROJECT = "MagGrad"
+BOARD_QMC = "MagGrad_QMC_V1"
+BOARD_AK_TMAG = "MagGrad_AK_TMAG_V1"
+
+BOARD_HARDWARE_CONFIGS = {
+    BOARD_QMC: {"qmc6309"},
+    BOARD_AK_TMAG: {"ak09973d", "tmag3001"},
+}
+
+FRAME_TYPE_HARDWARE_CONFIGS = {
+    MagGradProtocol.TYPE_AK_ARRAY: {"ak09973d"},
+    MagGradProtocol.TYPE_TMAG_ARRAY: {"tmag3001"},
+    MagGradProtocol.TYPE_QMC_ARRAY: {"qmc6309"},
+}
+
+DEFAULT_SENSORS_BY_HARDWARE_CONFIG = {
+    "ak09973d": "AK_ICM",
+    "tmag3001": "TMAG_ICM",
+    "qmc6309": "QMC_ICM",
+}
+
+
+def parse_kv_reply(line):
+    """Parse simple STM32 replies such as 'OK INFO key=value ...'."""
+    fields = {}
+    for token in str(line).strip().split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        fields[key] = value
+    return fields
+
+
+def status_warning_message(status):
+    warning = status.get("warning", "NONE")
+    if not warning or warning == "NONE":
+        return ""
+    parts = [f"Firmware warning={warning}"]
+    for key in ("ak_count", "ak_bitmap", "fallback_from", "profile_status"):
+        value = status.get(key)
+        if value and value != "NONE":
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+def board_supports_hardware_config(board, hardware_config):
+    return str(hardware_config).lower() in BOARD_HARDWARE_CONFIGS.get(str(board), set())
+
+
+def frame_type_matches_hardware_config(frame_type, hardware_config):
+    allowed = FRAME_TYPE_HARDWARE_CONFIGS.get(frame_type)
+    if allowed is None:
+        return True
+    return str(hardware_config).lower() in allowed
+
+
+def default_sensors_for_hardware_config(hardware_config):
+    return DEFAULT_SENSORS_BY_HARDWARE_CONFIG.get(str(hardware_config).lower(), "ALL")
+
+
+def build_startup_commands(startup_strategy, sensors, rate_hz, profile="AUTO", icm_rate_hz=None):
+    strategy = str(startup_strategy or "").strip().lower()
+    sensor_arg = str(sensors or "ALL").strip().upper()
+    profile_arg = str(profile or "AUTO").strip().upper()
+    rate = int(rate_hz)
+
+    strategy_map = {
+        "idle": "IDLE",
+        "cont": "CONT",
+        "continuous": "CONT",
+        "trig": "TRIG",
+        "trigger": "TRIG",
+        "trig_auto": "TRIG_AUTO",
+        "trig-auto": "TRIG_AUTO",
+        "trigger_auto": "TRIG_AUTO",
+    }
+    mode = strategy_map.get(strategy)
+    if mode is None:
+        return []
+
+    commands = [f"PROFILE {profile_arg}"]
+    if mode != "IDLE":
+        commands.append(f"RATE {rate}")
+        if icm_rate_hz is not None and "ICM" in sensor_arg:
+            commands.append(f"ICM_RATE {int(icm_rate_hz)}")
+
+    if mode == "IDLE":
+        commands.append("MODE IDLE")
+    elif mode in ("CONT", "TRIG_AUTO"):
+        commands.append(f"MODE {mode} {sensor_arg} {rate}")
+    else:
+        commands.append(f"MODE {mode} {sensor_arg}")
+    return commands
+
+
 class StreamRecorder:
-    def __init__(self, output_dir, n_sensors):
+    def __init__(self, output_dir, n_sensors, metadata_supplier=None):
         self.output_dir = output_dir
         self.n_sensors = n_sensors
+        self.metadata_supplier = metadata_supplier
         self.state = "idle"
         self.path = None
         self.file = None
@@ -81,6 +177,9 @@ class StreamRecorder:
         self.path = os.path.join(self.output_dir, f"maggrad_stream_{ts}.csv")
         self.file = open(self.path, "w", newline="")
         self.writer = csv.writer(self.file)
+        metadata = self.metadata_supplier() if self.metadata_supplier is not None else {}
+        for key in sorted(metadata):
+            self.file.write(f"# {key},{metadata[key]}\n")
         header = ["pc_time", "seq", "tick_ms", "bitmap"]
         for sid in range(1, self.n_sensors + 1):
             header.extend([f"sensor_{sid}_x_gs", f"sensor_{sid}_y_gs", f"sensor_{sid}_z_gs"])
@@ -158,6 +257,11 @@ class SerialNodeMagGrad:
             self._runtime_param("~startup_sensors", "startup_sensors", "auto")
         ).strip().upper()
         self.trigger_rate_hz = int(self._runtime_param("~trigger_rate_hz", "trigger_rate_hz", 100))
+        self.icm_rate_hz = int(self._runtime_param("~icm_rate_hz", "icm_rate_hz", 480))
+        self.profile = str(self._runtime_param("~profile", "profile", "AUTO")).strip().upper()
+        self.firmware_info = {}
+        self.firmware_caps = {}
+        self.firmware_status = {}
 
         self.publish_scaled_imu = self._param_bool(
             rospy.get_param("~publish_scaled_imu", self.imu_config.publish_scaled_imu)
@@ -178,9 +282,11 @@ class SerialNodeMagGrad:
         self.pub_imu_raw = rospy.Publisher("maggrad/imu_raw", MagGradImuRaw, queue_size=100)
         self.pub_imu = rospy.Publisher("maggrad/imu", Imu, queue_size=100)
         self.pub_status = rospy.Publisher("maggrad/record/status", String, queue_size=10)
+        self.pub_firmware_status = rospy.Publisher("maggrad/firmware/status", String, queue_size=10)
 
-        self.recorder = StreamRecorder(self.output_dir, self.n_sensors)
+        self.recorder = StreamRecorder(self.output_dir, self.n_sensors, self._recording_metadata)
         self.sub_trigger = rospy.Subscriber("~record_trigger", Bool, self._on_record_trigger)
+        self.sub_command = rospy.Subscriber("~command", String, self._on_command)
         rospy.on_shutdown(self._on_shutdown)
 
         self.ser = None
@@ -262,11 +368,94 @@ class SerialNodeMagGrad:
         self.ser.flush()
         rospy.loginfo(f"STM32 command sent: {command.strip()}")
 
+    def _read_ascii_reply(self, timeout=0.5):
+        if not self.ser or not self.ser.is_open:
+            return ""
+        deadline = rospy.Time.now().to_sec() + timeout
+        buf = bytearray()
+        while rospy.Time.now().to_sec() < deadline:
+            waiting = getattr(self.ser, "in_waiting", 0)
+            if waiting <= 0:
+                rospy.sleep(0.01)
+                continue
+            byte = self.ser.read(1)
+            if not byte:
+                continue
+            if byte in (b"\n", b"\r"):
+                if buf:
+                    try:
+                        return buf.decode("ascii", errors="replace").strip()
+                    finally:
+                        buf.clear()
+                continue
+            if byte == MagGradProtocol.SYNC[:1]:
+                continue
+            buf.extend(byte)
+            if len(buf) > 240:
+                break
+        return buf.decode("ascii", errors="replace").strip()
+
+    def _query_firmware_identity(self):
+        self._write_command("INFO")
+        info_line = self._read_ascii_reply()
+        if info_line.startswith("OK INFO"):
+            self.firmware_info = parse_kv_reply(info_line)
+            board = self.firmware_info.get("board", "")
+            project = self.firmware_info.get("project", "")
+            if project and project != MAGGRAD_PROJECT:
+                rospy.logwarn(f"Unexpected firmware project={project}")
+            if board and not board_supports_hardware_config(board, self.hardware_config_name):
+                rospy.logerr(
+                    f"Firmware board={board} does not match hardware_config={self.hardware_config_name}"
+                )
+                rospy.signal_shutdown("Firmware/hardware_config mismatch")
+                return
+            self.pub_firmware_status.publish(String(data=info_line))
+        elif info_line:
+            rospy.logwarn(f"Unexpected INFO reply: {info_line}")
+
+        self._write_command("CAPS")
+        caps_line = self._read_ascii_reply()
+        if caps_line.startswith("OK CAPS"):
+            self.firmware_caps = parse_kv_reply(caps_line)
+            self.pub_firmware_status.publish(String(data=caps_line))
+        elif caps_line:
+            rospy.logwarn(f"Unexpected CAPS reply: {caps_line}")
+
+    def _publish_status_reply(self, status_line):
+        if not status_line:
+            return
+        self.pub_firmware_status.publish(String(data=status_line))
+        if status_line.startswith("OK STATUS"):
+            self.firmware_status = parse_kv_reply(status_line)
+            warning = status_warning_message(self.firmware_status)
+            if warning:
+                rospy.logwarn(warning)
+
     def _startup_sensor_arg(self):
         requested = self.startup_sensors
         if requested in ("", "AUTO"):
-            return "ALL"
+            return default_sensors_for_hardware_config(self.hardware_config_name)
         return requested
+
+    def _recording_metadata(self):
+        metadata = {
+            "project": self.firmware_info.get("project", ""),
+            "board": self.firmware_info.get("board", ""),
+            "protocol": self.firmware_info.get("protocol", ""),
+            "firmware_sensors": self.firmware_info.get("sensors", ""),
+            "hardware_config": self.hardware_config_name,
+            "startup_strategy": self.startup_strategy,
+            "startup_sensors": self._startup_sensor_arg(),
+            "rate_hz": str(self.trigger_rate_hz),
+            "icm_rate_hz": str(self.icm_rate_hz),
+            "profile": self.profile,
+        }
+        for key, value in self.firmware_caps.items():
+            metadata[f"caps_{key}"] = value
+        for key, value in self.firmware_status.items():
+            metadata[f"status_{key}"] = value
+        return metadata
 
     def _configure_firmware_stream(self):
         """Put firmware into the requested runtime mode.
@@ -278,30 +467,31 @@ class SerialNodeMagGrad:
             rospy.loginfo("STM32 startup command disabled")
             return
 
-        strategy_map = {
-            "idle": "IDLE",
-            "cont": "CONT",
-            "continuous": "CONT",
-            "trig": "TRIG",
-            "trigger": "TRIG",
-            "trig_auto": "TRIG_AUTO",
-            "trig-auto": "TRIG_AUTO",
-            "trigger_auto": "TRIG_AUTO",
-        }
-        mode = strategy_map.get(self.startup_strategy)
-        if mode is None:
+        self._query_firmware_identity()
+        commands = build_startup_commands(
+            self.startup_strategy,
+            self._startup_sensor_arg(),
+            self.trigger_rate_hz,
+            self.profile,
+            self.icm_rate_hz,
+        )
+        if not commands:
             rospy.logwarn(f"Unknown startup_strategy={self.startup_strategy}; leaving firmware mode unchanged")
             return
+        for command in commands:
+            self._write_command(command)
+        self._write_command("STATUS")
+        self._publish_status_reply(self._read_ascii_reply())
 
-        sensors = self._startup_sensor_arg()
-        if mode == "IDLE":
-            command = "MODE IDLE"
-        elif mode == "TRIG_AUTO":
-            command = f"MODE TRIG_AUTO {sensors} {self.trigger_rate_hz}"
-        else:
-            command = f"MODE {mode} {sensors}"
-
+    def _on_command(self, msg):
+        command = str(msg.data).strip()
+        if not command:
+            return
         self._write_command(command)
+        if command.upper().startswith(("STATUS", "INFO", "CAPS")):
+            reply = self._read_ascii_reply()
+            if reply:
+                self._publish_status_reply(reply)
 
     def _on_record_trigger(self, msg):
         self.recorder.trigger(msg.data)
@@ -552,6 +742,12 @@ class SerialNodeMagGrad:
 
     def _handle_frame(self, frame):
         frame_type, seq, tick_ms, payload = frame
+        if not frame_type_matches_hardware_config(frame_type, self.hardware_config_name):
+            rospy.logerr(
+                f"Frame type 0x{frame_type:02X} does not match hardware_config={self.hardware_config_name}"
+            )
+            rospy.signal_shutdown("Firmware frame type does not match hardware_config")
+            return
         if frame_type == MagGradProtocol.TYPE_AK_ARRAY:
             self._publish_ak_array(seq, tick_ms, payload)
         elif frame_type == MagGradProtocol.TYPE_TMAG_ARRAY:

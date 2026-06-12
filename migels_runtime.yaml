@@ -11,6 +11,9 @@
 #   trig         Send: MODE TRIG <startup_sensors>
 #   trig_auto    Send: MODE TRIG_AUTO <startup_sensors> <trigger_rate_hz>
 #
+# trigger_rate_hz controls magnetometer sampling/output.
+# icm_rate_hz controls ICM42670 sampling/output independently.
+#
 # startup_sensors:
 #   auto/ALL     Let firmware stream all supported sensors.
 #   AK_ICM       AK09973D magnetometer array + ICM42670 IMU.
@@ -27,5 +30,7 @@ hardware_config: ak09973d
 startup_strategy: trig_auto
 startup_sensors: AK_ICM
 trigger_rate_hz: 200
+icm_rate_hz: 480
+profile: LOW_NOISE
 port: auto
 baudrate: 115200
