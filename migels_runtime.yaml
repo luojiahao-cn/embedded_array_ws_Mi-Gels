@@ -1,3 +1,28 @@
+# Workspace-wide runtime defaults used when launch args are set to "runtime".
+#
+# hardware_config:
+#   Available host-side configs:
+#     qmc6309, ak09973d, tmag3001
+#
+# startup_strategy:
+#   none/manual  Do not send a startup command to the STM32.
+#   idle         Send: MODE IDLE
+#   cont         Send: MODE CONT <startup_sensors>
+#   trig         Send: MODE TRIG <startup_sensors>
+#   trig_auto    Send: MODE TRIG_AUTO <startup_sensors> <trigger_rate_hz>
+#
+# startup_sensors:
+#   auto/ALL     Let firmware stream all supported sensors.
+#   AK_ICM       AK09973D magnetometer array + ICM42670 IMU.
+#   QMC_ICM      QMC6309 magnetometer array + ICM42670 IMU, if supported by firmware.
+#   TMAG_ICM     TMAG3001 magnetometer array + ICM42670 IMU, if supported by firmware.
+#   AK, QMC, TMAG may be available on firmware builds that support magnetometer-only modes.
+#
+# port:
+#   auto, /dev/ttyACM0, /dev/ttyUSB0, /dev/cu.usbmodem*, ...
+#
+# baudrate:
+#   Usually 115200 for the current MagGrad binary stream.
 hardware_config: ak09973d
 startup_strategy: trig_auto
 startup_sensors: AK_ICM

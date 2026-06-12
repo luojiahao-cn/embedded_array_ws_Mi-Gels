@@ -12,6 +12,12 @@ Terminal 1 launches the manual recorder from this workspace:
 ./tools/run_stm32_manual_migels.sh
 ```
 
+To activate the ROS environment in a shell without launching anything:
+
+```bash
+source ./tools/source_migels_ros_env.sh
+```
+
 Terminal 2 controls start/stop with Enter:
 
 ```bash
@@ -24,13 +30,15 @@ Both scripts support `--help`.
 
 | Script | Purpose |
 | --- | --- |
-| `run_stm32_manual_migels.sh` | Sources ROS, `zlab_robots`, and this workspace; verifies `sensor_data_collection` resolves to this worktree; launches `stm32_manual.launch` |
+| `source_migels_ros_env.sh` | Sources ROS, `zlab_robots`, and this workspace; verifies every package in this worktree resolves here |
+| `run_stm32_manual_migels.sh` | Sources `source_migels_ros_env.sh`; launches `stm32_manual.launch` |
 | `manual_record_enter.sh` | Publishes `std_msgs/Bool` start/stop triggers to `/maggrad_manual_record/record_trigger` |
 
 ## Environment
 
 | Variable | Default | Used by |
 | --- | --- | --- |
-| `ROS_DISTRO` | `noetic` | Both scripts |
-| `ZLAB_ROBOTS_WS` | `$HOME/zlab_robots` | Both scripts |
+| `ROS_DISTRO` | `noetic` | Environment and launch scripts |
+| `ZLAB_ROBOTS_WS` | `$HOME/zlab_robots` | Environment and launch scripts |
+| `MIGELS_RUNTIME_CONFIG` | `<workspace>/migels_runtime.yaml` | Environment and launch scripts |
 | `TOPIC` | `/maggrad_manual_record/record_trigger` | `manual_record_enter.sh` |
