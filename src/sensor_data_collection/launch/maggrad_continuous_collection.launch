@@ -30,6 +30,7 @@
   <arg name="n_sensors" default="runtime"/>
   <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
   <arg name="signal_config" default="$(find sensor_data_collection)/config/signal_params_maggrad_continuous.yaml"/>
+  <arg name="tagslam_config_file" default="$(find sensor_data_collection)/config/tagslam_migels.yaml"/>
   <arg name="record_tf" default="true"/>
   <arg name="tf_reference_frame" default="lab_table"/>
   <arg name="show_image" default="false"/>
@@ -45,7 +46,9 @@
   <arg name="ak_bitmap" default=""/>
   <arg name="ak_count" default=""/>
 
-  <include file="$(find zlab_robots_calibration)/launch/localization_tagslam.launch"/>
+  <include file="$(find zlab_robots_calibration)/launch/localization_tagslam.launch">
+    <arg name="tagslam_config_file" value="$(arg tagslam_config_file)"/>
+  </include>
 
   <node if="$(arg show_image)" name="maggrad_image_view" pkg="rqt_image_view"
         type="rqt_image_view" output="screen"/>
