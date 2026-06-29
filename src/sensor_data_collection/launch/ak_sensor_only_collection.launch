@@ -1,0 +1,57 @@
+<launch>
+  <!--
+    AK09973D sensor-only collection.
+    The operator controls Helmholtz coil channel/current and robot-arm rotation.
+    This launch only records AK magnetometer data and ICM IMU data.
+  -->
+
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data/ak_rotation"/>
+  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="icm_rate_hz" default="500"/>
+  <arg name="startup_profile" default="AUTO"/>
+  <arg name="experiment_id" default="ak_rotation"/>
+  <arg name="coil_current_a" default=""/>
+  <arg name="coil_channel" default=""/>
+  <arg name="rotation_run_id" default="run_001"/>
+  <arg name="min_valid_rows" default="100"/>
+  <arg name="delete_invalid_recordings" default="true"/>
+
+  <node name="serial_node_maggrad" pkg="serial_processor" type="serial_node_maggrad.py" output="screen">
+    <param name="port" value="$(arg port)"/>
+    <param name="baudrate" value="$(arg baudrate)"/>
+    <param name="hardware_config" value="ak09973d"/>
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="startup_strategy" value="cont"/>
+    <param name="startup_sensors" value="AK_ICM"/>
+    <param name="profile" value="$(arg startup_profile)"/>
+    <param name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
+    <param name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
+  </node>
+
+  <node name="maggrad_continuous_collection" pkg="sensor_data_collection"
+        type="maggrad_continuous_collection_node.py" output="screen">
+    <param name="output_dir" value="$(arg output_dir)"/>
+    <param name="hardware_config" value="ak09973d"/>
+    <param name="n_sensors" value="12"/>
+    <param name="record_tf" value="false"/>
+    <param name="use_calibrated" value="false"/>
+    <param name="min_valid_rows" value="$(arg min_valid_rows)"/>
+    <param name="delete_invalid_recordings" value="$(arg delete_invalid_recordings)"/>
+    <param name="coil_frequency_hz" value="1.0"/>
+    <rosparam param="coil_timing">
+      - {name: "manual_coil", channel: 1, phase_deg: 0.0, duty_cycle: 100.0}
+    </rosparam>
+    <param name="experiment_id" value="$(arg experiment_id)"/>
+    <param name="sensor_type" value="AK09973D"/>
+    <param name="board" value="MagGrad_AK_TMAG_V1"/>
+    <param name="profile" value="$(arg startup_profile)"/>
+    <param name="mag_rate_hz" value="$(arg trigger_rate_hz)"/>
+    <param name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
+    <param name="coil_current_a" value="$(arg coil_current_a)"/>
+    <param name="coil_channel" value="$(arg coil_channel)"/>
+    <param name="rotation_run_id" value="$(arg rotation_run_id)"/>
+    <param name="warning" value="NONE"/>
+  </node>
+</launch>

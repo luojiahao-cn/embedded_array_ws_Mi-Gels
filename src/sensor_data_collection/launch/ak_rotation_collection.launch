@@ -1,0 +1,43 @@
+<launch>
+  <!--
+    AK09973D rotation collection for Helmholtz-coil consistency calibration.
+    Mechanical arm motion is controlled externally by the operator.
+  -->
+
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data/ak_rotation"/>
+  <arg name="trigger_rate_hz" default="100"/>
+  <arg name="icm_rate_hz" default="500"/>
+  <arg name="startup_profile" default="AUTO"/>
+  <arg name="experiment_id" default="ak_rotation"/>
+  <arg name="coil_current_a" default=""/>
+  <arg name="rotation_run_id" default="run_001"/>
+  <arg name="record_tf" default="true"/>
+  <arg name="tf_reference_frame" default="lab_table"/>
+  <arg name="show_image" default="false"/>
+
+  <include file="$(find sensor_data_collection)/launch/maggrad_continuous_collection.launch">
+    <arg name="port" value="$(arg port)"/>
+    <arg name="baudrate" value="$(arg baudrate)"/>
+    <arg name="hardware_config" value="ak09973d"/>
+    <arg name="output_dir" value="$(arg output_dir)"/>
+    <arg name="startup_strategy" value="cont"/>
+    <arg name="startup_sensors" value="AK_ICM"/>
+    <arg name="startup_profile" value="$(arg startup_profile)"/>
+    <arg name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
+    <arg name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
+    <arg name="n_sensors" value="12"/>
+    <arg name="record_tf" value="$(arg record_tf)"/>
+    <arg name="tf_reference_frame" value="$(arg tf_reference_frame)"/>
+    <arg name="show_image" value="$(arg show_image)"/>
+    <arg name="experiment_id" value="$(arg experiment_id)"/>
+    <arg name="sensor_type" value="AK09973D"/>
+    <arg name="board" value="MagGrad_AK_TMAG_V1"/>
+    <arg name="profile" value="$(arg startup_profile)"/>
+    <arg name="mag_rate_hz" value="$(arg trigger_rate_hz)"/>
+    <arg name="coil_current_a" value="$(arg coil_current_a)"/>
+    <arg name="rotation_run_id" value="$(arg rotation_run_id)"/>
+    <arg name="warning" value="NONE"/>
+  </include>
+</launch>

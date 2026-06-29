@@ -16,14 +16,30 @@ from tf2_ros import Buffer, TransformListener
 
 
 class ContinuousRecorder:
-    def __init__(self, output_dir, n_sensors, record_format, tf_frames=None):
+    def __init__(
+        self,
+        output_dir,
+        n_sensors,
+        record_format,
+        tf_frames=None,
+        experiment_metadata=None,
+        min_valid_rows=1,
+        delete_invalid=True,
+    ):
         self.output_dir = os.path.expanduser(output_dir)
         self.n_sensors = int(n_sensors)
         self.record_format = str(record_format).lower()
         self.tf_frames = list(tf_frames or [])
+        self.experiment_metadata = dict(experiment_metadata or {})
+        self.min_valid_rows = int(min_valid_rows)
+        self.delete_invalid = bool(delete_invalid)
         self.file = None
         self.writer = None
         self.path = None
+        self.rows_written = 0
+        self.last_closed_path = None
+        self.last_closed_rows = 0
+        self.last_closed_valid = True
         os.makedirs(self.output_dir, exist_ok=True)
 
     @property
@@ -35,22 +51,59 @@ class ContinuousRecorder:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "jsonl" if self.record_format == "jsonl" else "csv"
         self.path = os.path.join(self.output_dir, f"maggrad_continuous_{ts}.{ext}")
+        self.rows_written = 0
         self.file = open(self.path, "w", newline="")
         if ext == "csv":
+            for key in sorted(self.experiment_metadata):
+                self.file.write(f"# {key},{self.experiment_metadata[key]}\n")
             self.writer = csv.writer(self.file)
             self.writer.writerow(self._csv_header())
         rospy.loginfo(f"[MagGradContinuous] Recording started: {self.path}")
 
     def stop(self):
+        path = self.path
+        rows = self.rows_written
         if self.file is not None:
             self.file.flush()
             os.fsync(self.file.fileno())
             self.file.close()
         self.file = None
         self.writer = None
+        self.last_closed_path = path
+        self.last_closed_rows = rows
+        self.last_closed_valid = rows >= self.min_valid_rows
+        if path and not self.last_closed_valid:
+            message = (
+                f"[MagGradContinuous] Recording has only {rows} data rows "
+                f"(< min_valid_rows={self.min_valid_rows}): {path}"
+            )
+            if self.delete_invalid:
+                try:
+                    os.remove(path)
+                    rospy.logwarn(f"{message}; deleted invalid file")
+                except OSError as exc:
+                    rospy.logwarn(f"{message}; failed to delete invalid file: {exc}")
+            else:
+                rospy.logwarn(f"{message}; keeping invalid file")
 
     def _csv_header(self):
         header = [
+            "experiment_id",
+            "sensor_type",
+            "board",
+            "profile",
+            "mag_rate_hz",
+            "icm_rate_hz",
+            "coil_current_a",
+            "fy8300_voltage_v",
+            "current_at_5v_a",
+            "estimated_current_a",
+            "current_mapping",
+            "rotation_run_id",
+            "firmware_status",
+            "warning",
+            "ak_bitmap",
+            "ak_count",
             "pc_time",
             "ak_seq",
             "ak_tick_ms",
@@ -105,13 +158,31 @@ class ContinuousRecorder:
             return
         if self.record_format == "jsonl":
             self.file.write(json.dumps(record, sort_keys=True) + "\n")
+            self.rows_written += 1
             return
 
         sensors = {int(item["id"]): item for item in record["sensors"]}
         coil = record["coil"]
         imu_raw = record.get("imu_raw") or {}
         imu = record.get("imu") or {}
+        meta = record.get("experiment") or {}
         row = [
+            meta.get("experiment_id", ""),
+            meta.get("sensor_type", ""),
+            meta.get("board", ""),
+            meta.get("profile", ""),
+            meta.get("mag_rate_hz", ""),
+            meta.get("icm_rate_hz", ""),
+            meta.get("coil_current_a", ""),
+            meta.get("fy8300_voltage_v", ""),
+            meta.get("current_at_5v_a", ""),
+            meta.get("estimated_current_a", ""),
+            meta.get("current_mapping", ""),
+            meta.get("rotation_run_id", ""),
+            meta.get("firmware_status", ""),
+            meta.get("warning", ""),
+            meta.get("ak_bitmap", ""),
+            meta.get("ak_count", ""),
             f"{record['pc_time']:.9f}",
             record["ak_seq"],
             record["ak_tick_ms"],
@@ -167,6 +238,7 @@ class ContinuousRecorder:
                 rotation.get("w", ""),
             ])
         self.writer.writerow(row)
+        self.rows_written += 1
 
 
 class MagGradContinuousCollectionNode:
@@ -191,6 +263,8 @@ class MagGradContinuousCollectionNode:
             default_output_dir,
         )
         self.record_format = rospy.get_param("~record_format", "csv")
+        self.min_valid_rows = int(rospy.get_param("~min_valid_rows", 100))
+        self.delete_invalid_recordings = self._param_bool(rospy.get_param("~delete_invalid_recordings", True))
         self.use_calibrated = self._param_bool(rospy.get_param("~use_calibrated", False))
         self.ak_topic = "stm_uplink" if self.use_calibrated else "stm_uplink_raw"
         self.record_tf = self._param_bool(rospy.get_param("~record_tf", True))
@@ -202,6 +276,7 @@ class MagGradContinuousCollectionNode:
             "arm2_em_tcp_filt",
         ]))
         self.coil_frequency_hz = float(rospy.get_param("~coil_frequency_hz", 1.0))
+        self.experiment_metadata = self._load_experiment_metadata()
         if self.coil_frequency_hz <= 0:
             raise ValueError("coil_frequency_hz must be positive")
         self.coil_period_s = 1.0 / self.coil_frequency_hz
@@ -212,6 +287,7 @@ class MagGradContinuousCollectionNode:
         self.record_start_time = None
         self.latest_imu_raw = None
         self.latest_imu = None
+        self.latest_firmware_status = {}
 
         self.tf_buffer = None
         self.tf_listener = None
@@ -223,15 +299,24 @@ class MagGradContinuousCollectionNode:
             self.n_sensors,
             self.record_format,
             self.tf_frames if self.record_tf else [],
+            self.experiment_metadata,
+            self.min_valid_rows,
+            self.delete_invalid_recordings,
         )
 
         self.pub_coil_state = rospy.Publisher("maggrad/coil_state", String, queue_size=10, latch=True)
         self.pub_record_status = rospy.Publisher("maggrad/continuous_record/status", String, queue_size=10, latch=True)
 
         self.sub_trigger = rospy.Subscriber("~record_trigger", Bool, self._on_record_trigger)
+        self.sub_experiment_metadata = rospy.Subscriber(
+            "~experiment_metadata",
+            String,
+            self._on_experiment_metadata,
+        )
         self.sub_ak = rospy.Subscriber(self.ak_topic, StmUplink, self._on_ak)
         self.sub_imu_raw = rospy.Subscriber("maggrad/imu_raw", MagGradImuRaw, self._on_imu_raw)
         self.sub_imu = rospy.Subscriber("maggrad/imu", Imu, self._on_imu)
+        self.sub_firmware_status = rospy.Subscriber("maggrad/firmware/status", String, self._on_firmware_status)
         self.timer = rospy.Timer(rospy.Duration(0.02), self._on_timer)
         rospy.on_shutdown(self._on_shutdown)
 
@@ -240,6 +325,8 @@ class MagGradContinuousCollectionNode:
         rospy.loginfo(
             f"MagGrad continuous collection initialized: ak_topic={self.ak_topic}, "
             f"coil_frequency={self.coil_frequency_hz}Hz, record_tf={self.record_tf}, "
+            f"experiment_id={self.experiment_metadata.get('experiment_id', '')}, "
+            f"rotation_run_id={self.experiment_metadata.get('rotation_run_id', '')}, "
             f"output_dir={os.path.expanduser(self.output_dir)}"
         )
 
@@ -282,6 +369,27 @@ class MagGradContinuousCollectionNode:
                 "offset_v": float(item.get("offset_v", default_offset)),
             })
         return timing
+
+    def _load_experiment_metadata(self):
+        return {
+            "experiment_id": rospy.get_param("~experiment_id", ""),
+            "sensor_type": rospy.get_param("~sensor_type", "AK09973D" if self.hardware_config_name == "ak09973d" else ""),
+            "board": rospy.get_param("~board", "MagGrad_AK_TMAG_V1" if self.hardware_config_name == "ak09973d" else ""),
+            "profile": rospy.get_param("~profile", ""),
+            "mag_rate_hz": rospy.get_param("~mag_rate_hz", ""),
+            "icm_rate_hz": rospy.get_param("~icm_rate_hz", ""),
+            "coil_current_a": rospy.get_param("~coil_current_a", ""),
+            "fy8300_voltage_v": rospy.get_param("~fy8300_voltage_v", ""),
+            "current_at_5v_a": rospy.get_param("~current_at_5v_a", ""),
+            "estimated_current_a": rospy.get_param("~estimated_current_a", ""),
+            "current_mapping": rospy.get_param("~current_mapping", ""),
+            "coil_channel": rospy.get_param("~coil_channel", ""),
+            "rotation_run_id": rospy.get_param("~rotation_run_id", ""),
+            "firmware_status": rospy.get_param("~firmware_status", ""),
+            "warning": rospy.get_param("~warning", "NONE"),
+            "ak_bitmap": rospy.get_param("~ak_bitmap", ""),
+            "ak_count": rospy.get_param("~ak_count", ""),
+        }
 
     def _init_tf(self):
         if not self.record_tf:
@@ -339,6 +447,10 @@ class MagGradContinuousCollectionNode:
         status = {
             "recording": self.recording,
             "path": self.recorder.path,
+            "rows_written": self.recorder.rows_written,
+            "last_closed_path": self.recorder.last_closed_path,
+            "last_closed_rows": self.recorder.last_closed_rows,
+            "last_closed_valid": self.recorder.last_closed_valid,
             "coil_state": self._state_for_time(now),
         }
         self.pub_record_status.publish(String(data=json.dumps(status, sort_keys=True)))
@@ -357,6 +469,35 @@ class MagGradContinuousCollectionNode:
                 self._publish_coil_state(self._all_off_state(rospy.Time.now().to_sec()))
             self._publish_status()
 
+    def _on_experiment_metadata(self, msg):
+        updates = self._parse_metadata_update(msg.data)
+        if not updates:
+            rospy.logwarn(f"[MagGradContinuous] Ignoring empty experiment metadata update: {msg.data}")
+            return
+        with self.lock:
+            self.experiment_metadata.update(updates)
+            self.recorder.experiment_metadata.update(updates)
+        rospy.loginfo(f"[MagGradContinuous] Updated experiment metadata: {updates}")
+
+    def _parse_metadata_update(self, text):
+        text = str(text).strip()
+        if not text:
+            return {}
+        if text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError as exc:
+                rospy.logwarn(f"[MagGradContinuous] Invalid metadata JSON: {exc}")
+                return {}
+            return {str(key): str(value) for key, value in parsed.items()}
+        updates = {}
+        for token in text.replace(",", " ").split():
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            updates[key.strip()] = value.strip()
+        return updates
+
     def _on_timer(self, _event):
         with self.lock:
             if not self.recording:
@@ -372,6 +513,34 @@ class MagGradContinuousCollectionNode:
         with self.lock:
             self.latest_imu = msg
 
+    def _on_firmware_status(self, msg):
+        parsed = self._parse_kv_status(msg.data)
+        if not parsed:
+            return
+        with self.lock:
+            self.latest_firmware_status = parsed
+
+    def _parse_kv_status(self, line):
+        result = {}
+        for token in str(line).strip().split():
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            result[key.strip()] = value.strip()
+        return result
+
+    def _runtime_experiment_metadata(self):
+        meta = dict(self.experiment_metadata)
+        status = dict(self.latest_firmware_status)
+        if status:
+            meta["firmware_status"] = " ".join(f"{key}={status[key]}" for key in sorted(status))
+            meta["warning"] = status.get("warning", meta.get("warning", "NONE"))
+            meta["ak_bitmap"] = status.get("ak_bitmap", status.get("bitmap", meta.get("ak_bitmap", "")))
+            meta["ak_count"] = status.get("ak_count", meta.get("ak_count", ""))
+            meta["profile"] = status.get("profile", status.get("profile_id", meta.get("profile", "")))
+            meta["mag_rate_hz"] = status.get("target_hz", meta.get("mag_rate_hz", ""))
+        return meta
+
     def _on_ak(self, msg):
         pc_time = rospy.Time.now().to_sec()
         with self.lock:
@@ -380,6 +549,11 @@ class MagGradContinuousCollectionNode:
             state = self._state_for_time(pc_time)
             imu_raw = self._imu_raw_to_dict(self.latest_imu_raw)
             imu = self._imu_to_dict(self.latest_imu)
+            experiment = self._runtime_experiment_metadata()
+            if experiment.get("coil_channel") not in ("", None):
+                state = dict(state)
+                state["channel"] = experiment["coil_channel"]
+                state["name"] = f"manual_coil_{experiment['coil_channel']}"
         tf_data = self._lookup_tf_frames()
 
         record = {
@@ -387,6 +561,7 @@ class MagGradContinuousCollectionNode:
             "ak_seq": msg.header.seq,
             "ak_tick_ms": msg.timestamp,
             "ak_topic": self.ak_topic,
+            "experiment": experiment,
             "coil": state,
             "sensors": [
                 {"id": int(s.id), "x": float(s.x), "y": float(s.y), "z": float(s.z)}

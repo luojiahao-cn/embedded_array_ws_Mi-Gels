@@ -8,6 +8,7 @@ catkin_python_setup()
 catkin_package()
 
 catkin_install_python(PROGRAMS
+  scripts/analyze_ak_consistency.py
   scripts/calibration_affine_model.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

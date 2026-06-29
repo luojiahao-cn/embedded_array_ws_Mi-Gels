@@ -11,6 +11,39 @@ ROS package for Mi-Gels magnetic sensor data collection.
 | `launch/stm32_manual.launch` | Manual MagGrad calibration CSV recording |
 | `scripts/maggrad_continuous_collection_node.py` | Writes continuous MagGrad CSV/JSONL records |
 | `scripts/maggrad_manual_record_node.py` | Topic-triggered manual averaged CSV recorder |
+
+## AK Rotation Collection
+
+Use this launch file for AK09973D Helmholtz-coil rotation captures. The launch
+does not control the robot arm; move the arm externally and use the trigger
+topic to bracket one rotation run.
+
+```bash
+roslaunch sensor_data_collection ak_rotation_collection.launch \
+  trigger_rate_hz:=100 \
+  icm_rate_hz:=500 \
+  startup_profile:=AUTO \
+  experiment_id:=ak_rotation_001 \
+  coil_current_a:=1.25 \
+  rotation_run_id:=run_001
+```
+
+Start and stop recording:
+
+```bash
+rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: true" -1
+rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: false" -1
+```
+
+The CSV includes AK experiment fields, firmware warning/profile/bitmap/count
+when available, 12 sensor vectors, ICM data, and optional TF poses. Analyze a
+capture offline with:
+
+```bash
+rosrun calibration analyze_ak_consistency.py \
+  /path/to/maggrad_continuous_YYYYmmdd_HHMMSS.csv \
+  --output-dir /path/to/ak_analysis
+```
 | `config/maggrad_continuous_collection.yaml` | Continuous collection node parameters |
 | `config/signal_params_maggrad_continuous.yaml` | FY8300 timing for continuous collection |
 | `config/signal_params_manual.yaml` | FY8300/manual calibration timing |

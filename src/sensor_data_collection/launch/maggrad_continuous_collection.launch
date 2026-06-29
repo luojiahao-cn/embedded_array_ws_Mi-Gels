@@ -24,6 +24,8 @@
   <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
   <arg name="startup_strategy" default="runtime"/>
   <arg name="startup_sensors" default="runtime"/>
+  <arg name="startup_profile" default="runtime"/>
+  <arg name="icm_rate_hz" default="runtime"/>
   <arg name="trigger_rate_hz" default="runtime"/>
   <arg name="n_sensors" default="runtime"/>
   <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
@@ -31,6 +33,17 @@
   <arg name="record_tf" default="true"/>
   <arg name="tf_reference_frame" default="lab_table"/>
   <arg name="show_image" default="false"/>
+  <arg name="experiment_id" default=""/>
+  <arg name="sensor_type" default=""/>
+  <arg name="board" default=""/>
+  <arg name="profile" default="$(arg startup_profile)"/>
+  <arg name="mag_rate_hz" default="$(arg trigger_rate_hz)"/>
+  <arg name="coil_current_a" default=""/>
+  <arg name="rotation_run_id" default=""/>
+  <arg name="firmware_status" default=""/>
+  <arg name="warning" default="NONE"/>
+  <arg name="ak_bitmap" default=""/>
+  <arg name="ak_count" default=""/>
 
   <include file="$(find zlab_robots_calibration)/launch/localization_tagslam.launch"/>
 
@@ -48,6 +61,8 @@
     <param name="output_dir" value="$(arg output_dir)"/>
     <param name="startup_strategy" value="$(arg startup_strategy)"/>
     <param name="startup_sensors" value="$(arg startup_sensors)"/>
+    <param name="profile" value="$(arg startup_profile)"/>
+    <param name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
     <param name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
   </node>
 
@@ -59,5 +74,17 @@
     <param name="n_sensors" value="$(arg n_sensors)"/>
     <param name="record_tf" value="$(arg record_tf)"/>
     <param name="tf_reference_frame" value="$(arg tf_reference_frame)"/>
+    <param name="experiment_id" value="$(arg experiment_id)"/>
+    <param name="sensor_type" value="$(arg sensor_type)"/>
+    <param name="board" value="$(arg board)"/>
+    <param name="profile" value="$(arg profile)"/>
+    <param name="mag_rate_hz" value="$(arg mag_rate_hz)"/>
+    <param name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
+    <param name="coil_current_a" value="$(arg coil_current_a)"/>
+    <param name="rotation_run_id" value="$(arg rotation_run_id)"/>
+    <param name="firmware_status" value="$(arg firmware_status)"/>
+    <param name="warning" value="$(arg warning)"/>
+    <param name="ak_bitmap" value="$(arg ak_bitmap)"/>
+    <param name="ak_count" value="$(arg ak_count)"/>
   </node>
 </launch>
