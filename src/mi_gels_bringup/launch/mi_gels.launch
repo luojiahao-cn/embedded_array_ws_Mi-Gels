@@ -1,0 +1,28 @@
+<launch>
+  <!--
+    MI-GELS 主启动入口。
+
+    当前包含：
+      1. AprilTag/TagSLAM 视觉跟踪
+      2. MagGrad 传感器读取
+      3. FY8300 信号发生器
+
+    后续新的硬件或实验模块可以继续以 include 的方式加到这里。
+  -->
+
+  <param name="use_sim_time" value="false"/>
+
+  <!-- 模块开关：测试时可以单独关闭某一部分。 -->
+  <arg name="start_apriltag_tracking" default="true"/>
+  <arg name="start_maggrad_stream" default="true"/>
+  <arg name="start_signal_generator" default="true"/>
+
+  <include if="$(arg start_apriltag_tracking)"
+           file="$(find mi_gels_bringup)/launch/apriltag_tracking.launch"/>
+
+  <include if="$(arg start_maggrad_stream)"
+           file="$(find mi_gels_bringup)/launch/maggrad_stream.launch"/>
+
+  <include if="$(arg start_signal_generator)"
+           file="$(find mi_gels_bringup)/launch/fy8300_signal.launch"/>
+</launch>

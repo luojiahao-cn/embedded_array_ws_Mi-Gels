@@ -140,6 +140,16 @@ class MagGradRuntimeProtocolTest(unittest.TestCase):
             "Firmware warning=AK_INIT_PARTIAL ak_count=11 ak_bitmap=0xEFF",
         )
 
+    def test_extract_ascii_reply_from_mixed_binary_text(self):
+        line = "\x00Z\ufffd@\t\ufffdOK INFO project=MagGrad board=MagGrad_AK_TMAG_V1"
+
+        reply = self.mod.extract_ascii_reply(line)
+
+        self.assertEqual(reply, "OK INFO project=MagGrad board=MagGrad_AK_TMAG_V1")
+
+    def test_extract_ascii_reply_returns_empty_without_reply_token(self):
+        self.assertEqual(self.mod.extract_ascii_reply("\x00Z\ufffd@\t\ufffd"), "")
+
     def test_recording_metadata_includes_latest_status(self):
         node = object.__new__(self.mod.SerialNodeMagGrad)
         node.firmware_info = {"project": "MagGrad", "board": "MagGrad_AK_TMAG_V1", "protocol": "maggrad_binary_v1"}
@@ -163,6 +173,46 @@ class MagGradRuntimeProtocolTest(unittest.TestCase):
         self.assertEqual(metadata["status_warning"], "AK_INIT_PARTIAL")
         self.assertEqual(metadata["status_actual_hz"], "199")
         self.assertEqual(metadata["status_ak_bitmap"], "0xEFF")
+
+    def test_first_sensor_data_log_only_emits_once(self):
+        messages = []
+        original_loginfo = self.mod.rospy.loginfo
+        self.mod.rospy.loginfo = lambda message: messages.append(message)
+        try:
+            node = object.__new__(self.mod.SerialNodeMagGrad)
+            node._sensor_data_seen = False
+
+            self.mod.SerialNodeMagGrad._log_first_sensor_data(node, 7, 1234, 0x0FFF, list(range(1, 13)))
+            self.mod.SerialNodeMagGrad._log_first_sensor_data(node, 8, 1239, 0x0FFF, list(range(1, 13)))
+        finally:
+            self.mod.rospy.loginfo = original_loginfo
+
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Detected MagGrad sensor data", messages[0])
+        self.assertIn("seq=7", messages[0])
+        self.assertIn("sensors=12", messages[0])
+        self.assertTrue(node._sensor_data_seen)
+
+    def test_missing_sensor_warning_reports_missing_ids_once(self):
+        messages = []
+        original_logwarn = self.mod.rospy.logwarn
+        self.mod.rospy.logwarn = lambda message: messages.append(message)
+        try:
+            node = object.__new__(self.mod.SerialNodeMagGrad)
+            node.n_sensors = 12
+            node._missing_sensor_warning_seen = False
+
+            self.mod.SerialNodeMagGrad._warn_missing_sensors(node, 9, 0x07FF, list(range(1, 12)))
+            self.mod.SerialNodeMagGrad._warn_missing_sensors(node, 10, 0x07FF, list(range(1, 12)))
+        finally:
+            self.mod.rospy.logwarn = original_logwarn
+
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Missing MagGrad sensor data", messages[0])
+        self.assertIn("expected=12", messages[0])
+        self.assertIn("received=11", messages[0])
+        self.assertIn("missing_ids=12", messages[0])
+        self.assertTrue(node._missing_sensor_warning_seen)
 
     def test_noise_analysis_outputs_required_columns(self):
         spec = importlib.util.spec_from_file_location(

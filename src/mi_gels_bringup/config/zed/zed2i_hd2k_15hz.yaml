@@ -1,0 +1,12 @@
+# Original Zlab ZED2i profile for AprilTag/tagSLAM tracking.
+# Use together with cameras_hd2k_15hz.yaml.
+general:
+  grab_resolution: 'HD2K'
+  grab_frame_rate: 15
+  pub_resolution: 'NATIVE'
+  pub_frame_rate: 15.0
+
+depth:
+  depth_mode: 'ULTRA'
+
+point_cloud_freq: 15.0

@@ -1,0 +1,67 @@
+<launch>
+  <!--
+    Project-owned entry point for MagGrad continuous collection.
+
+    This is intentionally a thin wrapper in phase 1. The collection node and
+    lower-level launch wiring still live in sensor_data_collection while the
+    user-facing experiment entry points move into mi_gels_bringup.
+  -->
+
+  <arg name="port" default="runtime"/>
+  <arg name="baudrate" default="runtime"/>
+  <arg name="hardware_config" default="runtime"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
+  <arg name="startup_strategy" default="runtime"/>
+  <arg name="startup_sensors" default="runtime"/>
+  <arg name="startup_profile" default="runtime"/>
+  <arg name="icm_rate_hz" default="runtime"/>
+  <arg name="trigger_rate_hz" default="runtime"/>
+  <arg name="n_sensors" default="runtime"/>
+  <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
+  <arg name="signal_config" default="$(find mi_gels_bringup)/config/signal/signal_params_maggrad_continuous.yaml"/>
+  <arg name="tagslam_config_file" default="$(find sensor_data_collection)/config/tagslam_migels.yaml"/>
+  <arg name="record_tf" default="true"/>
+  <arg name="tf_reference_frame" default="lab_table"/>
+  <arg name="show_image" default="false"/>
+  <arg name="experiment_id" default=""/>
+  <arg name="sensor_type" default=""/>
+  <arg name="board" default=""/>
+  <arg name="profile" default="$(arg startup_profile)"/>
+  <arg name="mag_rate_hz" default="$(arg trigger_rate_hz)"/>
+  <arg name="coil_current_a" default=""/>
+  <arg name="rotation_run_id" default=""/>
+  <arg name="firmware_status" default=""/>
+  <arg name="warning" default="NONE"/>
+  <arg name="ak_bitmap" default=""/>
+  <arg name="ak_count" default=""/>
+
+  <include file="$(find sensor_data_collection)/launch/maggrad_continuous_collection.launch">
+    <arg name="port" value="$(arg port)"/>
+    <arg name="baudrate" value="$(arg baudrate)"/>
+    <arg name="hardware_config" value="$(arg hardware_config)"/>
+    <arg name="output_dir" value="$(arg output_dir)"/>
+    <arg name="startup_strategy" value="$(arg startup_strategy)"/>
+    <arg name="startup_sensors" value="$(arg startup_sensors)"/>
+    <arg name="startup_profile" value="$(arg startup_profile)"/>
+    <arg name="icm_rate_hz" value="$(arg icm_rate_hz)"/>
+    <arg name="trigger_rate_hz" value="$(arg trigger_rate_hz)"/>
+    <arg name="n_sensors" value="$(arg n_sensors)"/>
+    <arg name="collection_config" value="$(arg collection_config)"/>
+    <arg name="signal_config" value="$(arg signal_config)"/>
+    <arg name="tagslam_config_file" value="$(arg tagslam_config_file)"/>
+    <arg name="record_tf" value="$(arg record_tf)"/>
+    <arg name="tf_reference_frame" value="$(arg tf_reference_frame)"/>
+    <arg name="show_image" value="$(arg show_image)"/>
+    <arg name="experiment_id" value="$(arg experiment_id)"/>
+    <arg name="sensor_type" value="$(arg sensor_type)"/>
+    <arg name="board" value="$(arg board)"/>
+    <arg name="profile" value="$(arg profile)"/>
+    <arg name="mag_rate_hz" value="$(arg mag_rate_hz)"/>
+    <arg name="coil_current_a" value="$(arg coil_current_a)"/>
+    <arg name="rotation_run_id" value="$(arg rotation_run_id)"/>
+    <arg name="firmware_status" value="$(arg firmware_status)"/>
+    <arg name="warning" value="$(arg warning)"/>
+    <arg name="ak_bitmap" value="$(arg ak_bitmap)"/>
+    <arg name="ak_count" value="$(arg ak_count)"/>
+  </include>
+</launch>

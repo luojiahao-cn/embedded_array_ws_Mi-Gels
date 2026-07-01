@@ -1,0 +1,31 @@
+<launch>
+  <!--
+    Project-owned ZED2i camera entry point.
+
+    The upstream zed_wrapper launch loads its default parameters inside the
+    zed_wrapper_node block. This file then overlays the MI-GELS profile under
+    the same node namespace so camera rate/resolution choices live in this
+    repository instead of in the upstream wrapper checkout.
+  -->
+
+  <arg name="camera_name" default="zed2i"/>
+  <arg name="node_name" default="zed_node"/>
+  <arg name="camera_model" default="zed2i"/>
+  <arg name="base_frame" default="base_link"/>
+  <arg name="publish_urdf" default="true"/>
+  <arg name="svo_file" default=""/>
+  <arg name="stream" default=""/>
+  <arg name="zed_profile" default="$(find mi_gels_bringup)/config/zed/zed2i_hd1080_30hz.yaml"/>
+
+  <include file="$(find zed_wrapper)/launch/zed2i.launch">
+    <arg name="camera_name" value="$(arg camera_name)"/>
+    <arg name="node_name" value="$(arg node_name)"/>
+    <arg name="camera_model" value="$(arg camera_model)"/>
+    <arg name="base_frame" value="$(arg base_frame)"/>
+    <arg name="publish_urdf" value="$(arg publish_urdf)"/>
+    <arg name="svo_file" value="$(arg svo_file)"/>
+    <arg name="stream" value="$(arg stream)"/>
+  </include>
+
+  <rosparam ns="/$(arg camera_name)/$(arg node_name)" command="load" file="$(arg zed_profile)"/>
+</launch>

@@ -91,6 +91,14 @@ def parse_kv_reply(line):
     return fields
 
 
+def extract_ascii_reply(line):
+    text = str(line).strip()
+    starts = [idx for token in ("OK ", "ERR ") if (idx := text.find(token)) >= 0]
+    if not starts:
+        return ""
+    return text[min(starts):].strip()
+
+
 def status_warning_message(status):
     warning = status.get("warning", "NONE")
     if not warning or warning == "NONE":
@@ -262,6 +270,8 @@ class SerialNodeMagGrad:
         self.firmware_info = {}
         self.firmware_caps = {}
         self.firmware_status = {}
+        self._sensor_data_seen = False
+        self._missing_sensor_warning_seen = False
 
         self.publish_scaled_imu = self._param_bool(
             rospy.get_param("~publish_scaled_imu", self.imu_config.publish_scaled_imu)
@@ -384,7 +394,10 @@ class SerialNodeMagGrad:
             if byte in (b"\n", b"\r"):
                 if buf:
                     try:
-                        return buf.decode("ascii", errors="replace").strip()
+                        line = buf.decode("ascii", errors="replace").strip()
+                        reply = extract_ascii_reply(line)
+                        if reply:
+                            return reply
                     finally:
                         buf.clear()
                 continue
@@ -393,7 +406,8 @@ class SerialNodeMagGrad:
             buf.extend(byte)
             if len(buf) > 240:
                 break
-        return buf.decode("ascii", errors="replace").strip()
+        line = buf.decode("ascii", errors="replace").strip()
+        return extract_ascii_reply(line)
 
     def _query_firmware_identity(self):
         self._write_command("INFO")
@@ -552,6 +566,32 @@ class SerialNodeMagGrad:
         header.frame_id = frame_id
         return header
 
+    def _log_first_sensor_data(self, seq, tick_ms, bitmap, sensor_ids):
+        if self._sensor_data_seen:
+            return
+        self._sensor_data_seen = True
+        sensor_count = len(sensor_ids)
+        rospy.loginfo(
+            f"Detected MagGrad sensor data: seq={seq}, tick_ms={tick_ms}, "
+            f"bitmap=0x{bitmap:04X}, sensors={sensor_count}"
+        )
+
+    def _warn_missing_sensors(self, seq, bitmap, sensor_ids):
+        if self._missing_sensor_warning_seen:
+            return
+        expected_ids = set(range(1, self.n_sensors + 1))
+        received_ids = set(int(sid) for sid in sensor_ids)
+        missing_ids = sorted(expected_ids - received_ids)
+        if not missing_ids:
+            return
+
+        self._missing_sensor_warning_seen = True
+        missing_text = ",".join(str(sid) for sid in missing_ids)
+        rospy.logwarn(
+            f"Missing MagGrad sensor data: seq={seq}, bitmap=0x{bitmap:04X}, "
+            f"expected={self.n_sensors}, received={len(received_ids)}, missing_ids={missing_text}"
+        )
+
     def _publish_magnetometer_array(self, seq, tick_ms, bitmap, chip_sensors, frame_id):
         raw_sensors = []
         for sensor in chip_sensors:
@@ -607,6 +647,9 @@ class SerialNodeMagGrad:
         self.pub_magnitude.publish(magnitudes)
 
         self.recorder.write_snapshot(seq, tick_ms, bitmap, raw_sensors, self.latest_imu)
+        sensor_ids = [sensor.id for sensor in raw_sensors]
+        self._log_first_sensor_data(seq, tick_ms, bitmap, sensor_ids)
+        self._warn_missing_sensors(seq, bitmap, sensor_ids)
 
     def _publish_ak_array(self, seq, tick_ms, payload):
         if len(payload) < 3:

@@ -1,0 +1,12 @@
+# Faster experimental ZED2i profile for tracking when lower image resolution is
+# acceptable. AprilTag/tagSLAM accuracy should be checked before data capture.
+general:
+  grab_resolution: 'HD720'
+  grab_frame_rate: 60
+  pub_resolution: 'NATIVE'
+  pub_frame_rate: 60.0
+
+depth:
+  depth_mode: 'ULTRA'
+
+point_cloud_freq: 15.0

@@ -1,0 +1,137 @@
+<launch>
+  <!--
+    MI-GELS 视觉跟踪启动文件
+
+    这是项目第一个自主研发的相机/TagSLAM 启动组合替代方案。
+    它将节点实现保留在现有包中，仅负责实验层面的连接配置。
+    启动命令：
+      roslaunch mi_gels_bringup apriltag_tracking.launch
+  -->
+
+  <!-- 不使用仿真时间，使用真实硬件时间 -->
+  <param name="use_sim_time" value="false"/>
+
+  <!--
+    相机配置选择。这个名字会同时选择 ZED 配置和 TagSLAM 相机内参：
+      hd1080_30hz -> zed2i_hd1080_30hz.yaml + cameras_hd1080_30hz.yaml
+      hd2k_15hz   -> zed2i_hd2k_15hz.yaml   + cameras_hd2k_15hz.yaml
+  -->
+  <arg name="camera_profile" default="hd1080_30hz"/>
+  <arg name="zed_profile" default="$(find mi_gels_bringup)/config/zed/zed2i_$(arg camera_profile).yaml"/>
+  <!-- 左侧相机灰度图像话题 -->
+  <arg name="image_topic" default="/zed2i/zed_node/left/image_rect_gray"/>
+  <!-- 相机内参话题 -->
+  <arg name="camera_info_topic" default="/zed2i/zed_node/left/camera_info"/>
+  <!-- 相机坐标系名称 -->
+  <arg name="camera_frame" default="cam0"/>
+  <!-- 图像传输模式：raw 表示未压缩 -->
+  <arg name="transport" default="raw"/>
+
+  <!-- 标定文件目录 -->
+  <arg name="zlab_calibration_dir" default="$(find zlab_robots_calibration)/config"/>
+  <!-- TagSLAM 配置文件：定义 AprilTag 布局和先验位姿 -->
+  <arg name="tagslam_config_file" default="$(find mi_gels_bringup)/config/apriltag/tagslam_migels.yaml"/>
+  <!-- 相机标定文件：必须和 camera_profile 对应，避免用 2208x1242 内参处理 1920x1080 图像 -->
+  <arg name="calibration_file" default="$(find mi_gels_bringup)/config/zed/cameras_$(arg camera_profile).yaml"/>
+  <!-- 相机位姿文件：定义相机在机器人上的安装位置 -->
+  <arg name="camera_poses_file" default="$(arg zlab_calibration_dir)/camera_poses.yaml"/>
+  <!-- ROS 日志配置文件 -->
+  <arg name="rosconsole_config_file" default="$(arg zlab_calibration_dir)/rosconsole.config"/>
+  <!-- TagSLAM 输出目录：保存估计的位姿轨迹 -->
+  <arg name="tagslam_output_directory" default="$(find zlab_robots_calibration)/result/"/>
+
+  <!-- TF 变换超时时间（秒） -->
+  <arg name="reprojector_tf_timeout_s" default="0.005"/>
+  <!-- 是否显示重投影窗口 -->
+  <arg name="show_reprojector_window" default="false"/>
+  <!-- 是否显示原始图像 -->
+  <arg name="show_raw_image" default="false"/>
+  <!-- 是否显示 AprilTag 检测结果图像 -->
+  <arg name="show_detector_image" default="false"/>
+  <!-- 是否显示重投影图像（将 TF 坐标系投影到图像上） -->
+  <arg name="show_reprojected_image" default="false"/>
+
+  <!-- 启动 ZED2i 相机节点 -->
+  <include file="$(find mi_gels_bringup)/launch/zed2i_camera.launch">
+    <arg name="zed_profile" value="$(arg zed_profile)"/>
+  </include>
+
+  <!-- 启动 AprilTag 检测节点 -->
+  <include file="$(find tagslam)/launch/apriltag_detector_node.launch">
+    <arg name="image_topic" value="$(arg image_topic)"/>
+    <arg name="transport" value="$(arg transport)"/>
+  </include>
+
+  <!--
+    TagSLAM 主节点：融合 AprilTag 检测和机器人 TF，实现相机位姿估计和 Tag 地图优化
+    输入：AprilTag 检测结果、相机内参、相机-机器人 TF
+    输出：优化后的相机位姿和 Tag 位置
+  -->
+  <node pkg="tagslam" type="tagslam_node" name="tagslam" clear_params="true" output="log">
+    <env name="ROSCONSOLE_CONFIG_FILE" value="$(arg rosconsole_config_file)"/>
+    <rosparam param="cameras" command="load" file="$(arg calibration_file)"/>
+    <rosparam param="tagslam_config" command="load" file="$(arg tagslam_config_file)"/>
+    <rosparam param="camera_poses" command="load" file="$(arg camera_poses_file)"/>
+    <param name="has_compressed_images" value="false"/>
+    <param name="output_directory" value="$(arg tagslam_output_directory)"/>
+  </node>
+
+  <!--
+    以下为静态 TF 变换发布器：定义各坐标系到法兰坐标系的偏移
+    格式：x y z roll pitch yaw 父坐标系 子坐标系
+    0.1475m 是各机械臂末端工具坐标系的轴向偏移；
+    0.2175m 是 sensor_array_calib 到 sensor_array 的最新轴向偏移；
+    -1.57079632679 = -90°（绕 X 轴旋转）。
+  -->
+  <!-- Diana7 末端工具坐标系 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="diana7_flange_rect_publisher"
+        args="0 0 0.1475 -1.57079632679 0 0 diana7_flange_calib diana7_em_tcp"/>
+  <!-- Arm1 末端工具坐标系 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="arm1_flange_rect_publisher"
+        args="0 0 0.1475 -1.57079632679 0 0 arm1_flange_calib arm1_em_tcp"/>
+  <!-- Arm2 末端工具坐标系 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="arm2_flange_rect_publisher"
+        args="0 0 0.1475 -1.57079632679 0 0 arm2_flange_calib arm2_em_tcp"/>
+  <!-- 传感器阵列坐标系 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="sensor_array_flange_rect_publisher"
+        args="0 0 0.2175 -1.57079632679 0 0 sensor_array_calib sensor_array"/>
+
+  <!--
+    Frame Reprojector 节点：将机器人末端和传感器阵列的 TF 坐标系投影到相机图像上
+    用于可视化和实时检查各坐标系在图像中的位置
+  -->
+  <node if="$(eval arg('show_reprojector_window') == 'true' or arg('show_reprojected_image') == 'true')"
+        pkg="sensor_data_collection" type="frame_reprojector_fast.py"
+        name="frame_reprojector_node" output="log">
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+    <param name="camera_frame" value="$(arg camera_frame)"/>
+    <param name="tf_timeout_s" value="$(arg reprojector_tf_timeout_s)"/>
+    <rosparam param="target_frames">
+      <!-- 在图像上显示坐标轴，长度 0.1m -->
+      - {frame: 'diana7_em_tcp', type: 'axes', length: 0.1}
+      - {frame: 'arm1_em_tcp', type: 'axes', length: 0.1}
+      - {frame: 'arm2_em_tcp', type: 'axes', length: 0.1}
+      - {frame: 'sensor_array', type: 'axes', length: 0.1}
+    </rosparam>
+    <param name="show_window" value="$(arg show_reprojector_window)"/>
+  </node>
+
+  <!-- 原始相机图像查看器（可选） -->
+  <node if="$(arg show_raw_image)" name="mi_gels_raw_image_view" pkg="rqt_image_view"
+        type="rqt_image_view" output="screen" args="--clear-config $(arg image_topic)">
+    <remap from="image" to="$(arg image_topic)"/>
+  </node>
+
+  <!-- AprilTag 检测结果图像查看器（可选） -->
+  <node if="$(arg show_detector_image)" name="mi_gels_detector_image_view" pkg="rqt_image_view"
+        type="rqt_image_view" output="screen" args="--clear-config /detector/disp">
+    <remap from="image" to="/detector/disp"/>
+  </node>
+
+  <!-- 重投影图像查看器：显示坐标系在图像上的投影（可选） -->
+  <node if="$(arg show_reprojected_image)" name="mi_gels_reprojected_image_view" pkg="rqt_image_view"
+        type="rqt_image_view" output="screen" args="--clear-config /frame_reprojector_node/reprojected_image">
+    <remap from="image" to="/frame_reprojector_node/reprojected_image"/>
+  </node>
+</launch>

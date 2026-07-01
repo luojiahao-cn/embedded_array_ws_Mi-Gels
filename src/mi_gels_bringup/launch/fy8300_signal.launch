@@ -1,0 +1,11 @@
+<launch>
+  <!-- MI-GELS 项目自己的 FY8300 信号发生器启动入口。 -->
+
+  <!-- 信号发生器参数文件，默认使用 bringup 包内维护的配置。 -->
+  <arg name="signal_config" default="$(find mi_gels_bringup)/config/signal/signal_params_maggrad_continuous.yaml"/>
+
+  <!-- 启动 signal_generator 包中的 FY8300 节点，并加载三通道方波配置。 -->
+  <node name="fy8300" pkg="signal_generator" type="fy8300_node" output="screen">
+    <rosparam command="load" file="$(arg signal_config)"/>
+  </node>
+</launch>

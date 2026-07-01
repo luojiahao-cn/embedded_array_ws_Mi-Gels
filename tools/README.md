@@ -18,6 +18,13 @@ To activate the ROS environment in a shell without launching anything:
 source ./tools/source_migels_ros_env.sh
 ```
 
+When controlling zlab over SSH but showing ROS GUI windows on zlab's physical
+display:
+
+```bash
+source ./tools/zlab_ros_env.sh
+```
+
 Terminal 2 controls start/stop with Enter:
 
 ```bash
@@ -31,6 +38,7 @@ Both scripts support `--help`.
 | Script | Purpose |
 | --- | --- |
 | `source_migels_ros_env.sh` | Sources ROS, `zlab_robots`, and this workspace; verifies every package in this worktree resolves here |
+| `zlab_ros_env.sh` | Sets zlab's physical display variables, then sources `source_migels_ros_env.sh` |
 | `run_stm32_manual_migels.sh` | Sources `source_migels_ros_env.sh`; launches `stm32_manual.launch` |
 | `manual_record_enter.sh` | Publishes `std_msgs/Bool` start/stop triggers to `/maggrad_manual_record/record_trigger` |
 
