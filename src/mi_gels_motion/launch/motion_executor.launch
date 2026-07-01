@@ -1,0 +1,28 @@
+<launch>
+  <arg name="config_file" default="$(find mi_gels_motion)/config/diana7_line.yaml"/>
+  <arg name="sim" default="true"/>
+  <arg name="plan_only" default="false"/>
+  <arg name="tool_name" default="magnetometer_array"/>
+  <arg name="use_rviz" default="true"/>
+  <arg name="use_gui" default="false"/>
+  <arg name="move_group_timeout_s" default="120.0"/>
+
+  <include if="$(arg sim)"
+           file="$(find zlab_robots_bringup)/launch/diana7/diana7_moveit.launch">
+    <arg name="tool_name" value="$(arg tool_name)"/>
+    <arg name="use_gui" value="$(arg use_gui)"/>
+    <arg name="use_rviz" value="$(arg use_rviz)"/>
+  </include>
+
+  <include unless="$(arg sim)"
+           file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
+    <arg name="tool_name" value="$(arg tool_name)"/>
+    <arg name="use_rviz" value="$(arg use_rviz)"/>
+  </include>
+
+  <node name="mi_gels_motion_executor" pkg="mi_gels_motion" type="motion_executor.py" output="screen">
+    <param name="config_file" value="$(arg config_file)"/>
+    <param name="plan_only" value="$(arg plan_only)"/>
+    <param name="move_group_timeout_s" value="$(arg move_group_timeout_s)"/>
+  </node>
+</launch>

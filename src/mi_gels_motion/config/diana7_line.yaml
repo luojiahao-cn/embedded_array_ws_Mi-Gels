@@ -1,0 +1,31 @@
+arm: diana7
+move_group: diana7
+frame_id: world
+ee_link: diana7_ee_link
+waypoint_topic: /mi_gels_motion/waypoints
+tf_timeout_s: 2.0
+move_group_timeout_s: 120.0
+
+start:
+  mode: absolute
+  tf_frame: diana7_ee_link
+  pose:
+    position: {x: 0.50, y: -0.01, z: 1.0}
+    orientation: {x: -0.455, y: 0.542, z: -0.542, w: 0.455}
+
+trajectory:
+  type: line
+  vector: {x: 0.10, y: 0.0, z: 0.0}
+  points: 6
+
+motion:
+  plan_only: false
+  positioning_velocity_scaling: 0.005
+  positioning_acceleration_scaling: 0.005
+  trajectory_velocity_scaling: 0.005
+  trajectory_acceleration_scaling: 0.005
+  trajectory_tcp_speed_mps: 0.005
+  eef_step_m: 0.005
+  jump_threshold: 0.0
+  avoid_collisions: true
+  min_fraction: 0.95
