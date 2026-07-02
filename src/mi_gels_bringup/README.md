@@ -73,9 +73,12 @@ roslaunch mi_gels_bringup mi_gels.launch \
   start_motion_executor:=true motion_plan_only:=false
 ```
 
-Run the full experiment sequence. The orchestrator waits for ZED image,
-CameraInfo, and FY8300 channel status to match the signal config before
-triggering robot motion:
+Run the full experiment sequence. The FY8300 node starts early so parameters can
+be configured, but the signal config keeps channel outputs disabled by default.
+After the robot reaches the start pose, the orchestrator enables the FY8300
+outputs during the initial settling window, verifies channel status before data
+recording starts, and disables outputs again when recording ends or the sequence
+fails:
 
 ```bash
 roslaunch mi_gels_bringup mi_gels.launch \

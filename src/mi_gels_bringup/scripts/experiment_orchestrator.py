@@ -8,6 +8,7 @@ import rospy
 import yaml
 from sensor_msgs.msg import CameraInfo, Image
 from signal_generator.msg import ChannelStatus
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 
@@ -81,8 +82,15 @@ class ExperimentOrchestrator:
         self.camera_info_topic = rospy.get_param("~camera_info_topic", "/zed2i/zed_node/left/camera_info")
         self.signal_config = rospy.get_param("~signal_config")
         self.motion_service = rospy.get_param("~motion_service", "/mi_gels_motion/run_experiment")
+        self.prepare_start_service = rospy.get_param("~prepare_start_service", "/mi_gels_motion/prepare_start")
+        self.run_trajectory_service = rospy.get_param("~run_trajectory_service", "/mi_gels_motion/run_trajectory")
+        self.record_trigger_topic = rospy.get_param("~record_trigger_topic", "/maggrad_continuous_collection/record_trigger")
+        self.record_status_topic = rospy.get_param("~record_status_topic", "/maggrad/continuous_record/status")
         self.timeout_s = float(rospy.get_param("~timeout_s", 120.0))
         self.settle_time_s = float(rospy.get_param("~settle_time_s", 2.0))
+        self.initial_settle_time_s = float(rospy.get_param("~initial_settle_time_s", self.settle_time_s))
+        self.pre_motion_cycles = int(rospy.get_param("~pre_motion_cycles", 5))
+        self.coil_frequency_hz = float(rospy.get_param("~coil_frequency_hz", 1.0))
         self.frequency_tolerance = float(rospy.get_param("~frequency_tolerance", 0.01))
         self.voltage_tolerance = float(rospy.get_param("~voltage_tolerance", 0.05))
         self.phase_tolerance = float(rospy.get_param("~phase_tolerance", 0.5))
@@ -99,6 +107,20 @@ class ExperimentOrchestrator:
             "offset": self.voltage_tolerance,
             "phase": self.phase_tolerance,
             "duty_cycle": self.duty_tolerance,
+        }
+        if self.pre_motion_cycles < 0:
+            raise ValueError("pre_motion_cycles must be non-negative")
+        if self.coil_frequency_hz <= 0.0:
+            raise ValueError("coil_frequency_hz must be positive")
+        self.record_trigger_pub = rospy.Publisher(self.record_trigger_topic, Bool, queue_size=1, latch=True)
+        self.signal_output_pubs = {
+            channel: rospy.Publisher(
+                "{}/ch{}/output_en".format(self.signal_status_prefix.rstrip("/"), channel),
+                Bool,
+                queue_size=1,
+                latch=True,
+            )
+            for channel in self.signal_expected
         }
 
     def stage(self, number, message):
@@ -137,11 +159,13 @@ class ExperimentOrchestrator:
             camera_info.height,
         )
 
-    def wait_for_signal_generator(self, deadline):
+    def wait_for_signal_generator(self, deadline, output_enabled=None):
         rospy.loginfo("%s", self.stage(3, "Waiting for FY8300 channel status"))
         for channel in sorted(self.signal_expected):
             topic = "{}/ch{}/status".format(self.signal_status_prefix.rstrip("/"), channel)
-            expected = self.signal_expected[channel]
+            expected = dict(self.signal_expected[channel])
+            if output_enabled is not None:
+                expected["output_enabled"] = bool(output_enabled)
             last_error = "no status received"
             rospy.loginfo("%s: channel=%d topic=%s", self.stage(3, "Waiting for FY8300 status"), channel, topic)
             while not rospy.is_shutdown():
@@ -166,6 +190,11 @@ class ExperimentOrchestrator:
             if last_error != "no status received":
                 rospy.logdebug("FY8300 channel %d previous status mismatch: %s", channel, last_error)
 
+    def set_signal_outputs(self, enabled):
+        rospy.loginfo("%s: output_enabled=%s", self.stage(5, "Setting FY8300 outputs"), enabled)
+        for channel in sorted(self.signal_output_pubs):
+            self.signal_output_pubs[channel].publish(Bool(data=bool(enabled)))
+
     def trigger_motion(self, deadline):
         rospy.loginfo("%s: %s", self.stage(4, "Waiting for motion service"), self.motion_service)
         rospy.wait_for_service(self.motion_service, timeout=self._remaining_timeout(deadline))
@@ -184,16 +213,78 @@ class ExperimentOrchestrator:
             raise RuntimeError("Motion service failed: {}".format(response.message))
         rospy.loginfo("%s: %s", self.stage(5, "Motion service completed"), response.message)
 
+    def wait_for_recording_node(self, deadline):
+        rospy.loginfo("%s: %s", self.stage(4, "Waiting for recording status"), self.record_status_topic)
+        rospy.wait_for_message(
+            self.record_status_topic,
+            String,
+            timeout=self._remaining_timeout(deadline),
+        )
+
+    def call_trigger_service(self, service_name, deadline, label):
+        rospy.loginfo("%s: %s", self.stage(4, "Waiting for {}".format(label)), service_name)
+        rospy.wait_for_service(service_name, timeout=self._remaining_timeout(deadline))
+        proxy = rospy.ServiceProxy(service_name, Trigger)
+        response = proxy()
+        if not response.success:
+            raise RuntimeError("{} failed: {}".format(label, response.message))
+        rospy.loginfo("%s: %s", self.stage(4, "{} completed".format(label)), response.message)
+
+    def set_recording(self, enabled):
+        rospy.loginfo("%s: recording=%s topic=%s", self.stage(5, "Setting data recording"), enabled, self.record_trigger_topic)
+        self.record_trigger_pub.publish(Bool(data=bool(enabled)))
+
+    def pre_motion_wait_s(self):
+        return float(self.pre_motion_cycles) / self.coil_frequency_hz
+
+    def run_experiment_sequence(self, deadline):
+        recording_started = False
+        signal_enabled = False
+        try:
+            self.call_trigger_service(self.prepare_start_service, deadline, "prepare_start")
+            settle_deadline = deadline
+            if self.initial_settle_time_s > 0.0:
+                settle_deadline = min(deadline, time.time() + self.initial_settle_time_s)
+            self.set_signal_outputs(True)
+            signal_enabled = True
+            self.wait_for_signal_generator(settle_deadline, output_enabled=True)
+            if self.initial_settle_time_s > 0.0:
+                remaining_settle_s = max(0.0, settle_deadline - time.time())
+                rospy.loginfo(
+                    "%s: waiting %.2fs before recording",
+                    self.stage(5, "Initial pose settling"),
+                    remaining_settle_s,
+                )
+                rospy.sleep(remaining_settle_s)
+            self.set_recording(True)
+            recording_started = True
+            wait_s = self.pre_motion_wait_s()
+            if wait_s > 0.0:
+                rospy.loginfo(
+                    "%s: cycles=%d coil_frequency=%.3fHz wait=%.2fs",
+                    self.stage(5, "Pre-motion data collection"),
+                    self.pre_motion_cycles,
+                    self.coil_frequency_hz,
+                    wait_s,
+                )
+                rospy.sleep(wait_s)
+            self.call_trigger_service(self.run_trajectory_service, deadline, "run_trajectory")
+        finally:
+            if recording_started:
+                self.set_recording(False)
+            if signal_enabled:
+                self.set_signal_outputs(False)
+
     def run(self):
         deadline = time.time() + self.timeout_s
         current_stage = "initialization"
         try:
             current_stage = "camera"
             self.wait_for_camera(deadline)
-            current_stage = "FY8300"
-            self.wait_for_signal_generator(deadline)
-            current_stage = "motion trigger"
-            self.trigger_motion(deadline)
+            current_stage = "data recording"
+            self.wait_for_recording_node(deadline)
+            current_stage = "experiment sequence"
+            self.run_experiment_sequence(deadline)
             rospy.loginfo("%s", self.stage(6, "Experiment complete"))
         except Exception as exc:
             rospy.logerr("%s failed during %s: %s", self.stage(6, "Experiment failed"), current_stage, exc)

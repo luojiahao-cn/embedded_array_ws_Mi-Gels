@@ -5,7 +5,7 @@
     当前包含：
       1. AprilTag/TagSLAM 视觉跟踪
       2. MagGrad 传感器读取
-      3. FY8300 信号发生器
+      3. FY8300 信号发生器节点（默认只配置参数，不打开放大器输出）
       4. MI-GELS 机械臂运动入口
 
     后续新的硬件或实验模块可以继续以 include 的方式加到这里。
@@ -21,6 +21,7 @@
   <arg name="start_signal_generator" default="true"/>
   <arg name="start_motion_executor" default="true"/>
   <arg name="start_experiment_orchestrator" default="true"/>
+  <arg name="start_data_recording" default="true"/>
 
   <include if="$(arg start_apriltag_tracking)"
            file="$(find mi_gels_bringup)/launch/apriltag_tracking.launch"/>
@@ -28,6 +29,7 @@
   <include if="$(arg start_maggrad_stream)"
            file="$(find mi_gels_bringup)/launch/maggrad_stream.launch"/>
 
+  <!-- FY8300 节点可提前启动，output_en 由 experiment_orchestrator 在起点稳定阶段托管。 -->
   <include if="$(arg start_signal_generator)"
            file="$(find mi_gels_bringup)/launch/fy8300_signal.launch"/>
 
@@ -39,9 +41,33 @@
   <arg name="motion_plan_only" default="false"/>
   <arg name="motion_auto_start" default="false"/>
   <arg name="motion_run_service" default="/mi_gels_motion/run_experiment"/>
+  <arg name="motion_prepare_start_service" default="/mi_gels_motion/prepare_start"/>
+  <arg name="motion_run_trajectory_service" default="/mi_gels_motion/run_trajectory"/>
   <arg name="signal_config" default="$(find mi_gels_bringup)/config/signal/signal_params_maggrad_continuous.yaml"/>
+  <arg name="record_output_dir" default="$(find sensor_data_collection)/../../data"/>
+  <arg name="record_collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
+  <arg name="record_hardware_config" default="runtime"/>
+  <arg name="record_n_sensors" default="runtime"/>
+  <arg name="record_tf" default="true"/>
+  <arg name="record_tf_reference_frame" default="lab_table"/>
+  <arg name="record_experiment_id" default=""/>
+  <arg name="record_sensor_type" default=""/>
+  <arg name="record_board" default=""/>
+  <arg name="record_profile" default="runtime"/>
+  <arg name="record_mag_rate_hz" default="runtime"/>
+  <arg name="record_icm_rate_hz" default="runtime"/>
+  <arg name="record_coil_current_a" default=""/>
+  <arg name="record_rotation_run_id" default=""/>
+  <arg name="record_firmware_status" default=""/>
+  <arg name="record_warning" default="NONE"/>
+  <arg name="record_ak_bitmap" default=""/>
+  <arg name="record_ak_count" default=""/>
   <arg name="orchestrator_timeout_s" default="120.0"/>
-  <arg name="orchestrator_settle_time_s" default="2.0"/>
+  <arg name="orchestrator_initial_settle_time_s" default="2.0"/>
+  <arg name="orchestrator_pre_motion_cycles" default="5"/>
+  <arg name="orchestrator_record_trigger_topic" default="/maggrad_continuous_collection/record_trigger"/>
+  <arg name="orchestrator_record_status_topic" default="/maggrad/continuous_record/status"/>
+  <arg name="orchestrator_coil_frequency_hz" default="1.0"/>
   <arg name="orchestrator_camera_image_topic" default="/zed2i/zed_node/left/image_rect_gray"/>
   <arg name="orchestrator_camera_info_topic" default="/zed2i/zed_node/left/camera_info"/>
   <arg name="orchestrator_signal_status_prefix" default="/fy8300"/>
@@ -56,9 +82,37 @@
     <arg name="use_rviz" value="$(arg robot_use_rviz)"/>
     <arg name="auto_start" value="$(arg motion_auto_start)"/>
     <arg name="run_service_name" value="$(arg motion_run_service)"/>
+    <arg name="prepare_start_service_name" value="$(arg motion_prepare_start_service)"/>
+    <arg name="run_trajectory_service_name" value="$(arg motion_run_trajectory_service)"/>
   </include>
 
-  <node if="$(eval arg('start_experiment_orchestrator') and not arg('motion_auto_start') and arg('start_apriltag_tracking') and arg('start_signal_generator') and arg('start_motion_executor'))"
+  <node if="$(arg start_data_recording)"
+        name="maggrad_continuous_collection"
+        pkg="sensor_data_collection"
+        type="maggrad_continuous_collection_node.py"
+        output="screen">
+    <rosparam file="$(arg record_collection_config)" command="load"/>
+    <param name="output_dir" value="$(arg record_output_dir)"/>
+    <param name="hardware_config" value="$(arg record_hardware_config)"/>
+    <param name="n_sensors" value="$(arg record_n_sensors)"/>
+    <param name="record_tf" value="$(arg record_tf)"/>
+    <param name="tf_reference_frame" value="$(arg record_tf_reference_frame)"/>
+    <param name="coil_frequency_hz" value="$(arg orchestrator_coil_frequency_hz)"/>
+    <param name="experiment_id" value="$(arg record_experiment_id)"/>
+    <param name="sensor_type" value="$(arg record_sensor_type)"/>
+    <param name="board" value="$(arg record_board)"/>
+    <param name="profile" value="$(arg record_profile)"/>
+    <param name="mag_rate_hz" value="$(arg record_mag_rate_hz)"/>
+    <param name="icm_rate_hz" value="$(arg record_icm_rate_hz)"/>
+    <param name="coil_current_a" value="$(arg record_coil_current_a)"/>
+    <param name="rotation_run_id" value="$(arg record_rotation_run_id)"/>
+    <param name="firmware_status" value="$(arg record_firmware_status)"/>
+    <param name="warning" value="$(arg record_warning)"/>
+    <param name="ak_bitmap" value="$(arg record_ak_bitmap)"/>
+    <param name="ak_count" value="$(arg record_ak_count)"/>
+  </node>
+
+  <node if="$(eval arg('start_experiment_orchestrator') and not arg('motion_auto_start') and arg('start_apriltag_tracking') and arg('start_signal_generator') and arg('start_motion_executor') and arg('start_data_recording'))"
         name="mi_gels_experiment_orchestrator"
         pkg="mi_gels_bringup"
         type="experiment_orchestrator.py"
@@ -68,8 +122,14 @@
     <param name="signal_config" value="$(arg signal_config)"/>
     <param name="signal_status_prefix" value="$(arg orchestrator_signal_status_prefix)"/>
     <param name="motion_service" value="$(arg motion_run_service)"/>
+    <param name="prepare_start_service" value="$(arg motion_prepare_start_service)"/>
+    <param name="run_trajectory_service" value="$(arg motion_run_trajectory_service)"/>
+    <param name="record_trigger_topic" value="$(arg orchestrator_record_trigger_topic)"/>
+    <param name="record_status_topic" value="$(arg orchestrator_record_status_topic)"/>
     <param name="timeout_s" value="$(arg orchestrator_timeout_s)"/>
-    <param name="settle_time_s" value="$(arg orchestrator_settle_time_s)"/>
+    <param name="initial_settle_time_s" value="$(arg orchestrator_initial_settle_time_s)"/>
+    <param name="pre_motion_cycles" value="$(arg orchestrator_pre_motion_cycles)"/>
+    <param name="coil_frequency_hz" value="$(arg orchestrator_coil_frequency_hz)"/>
     <param name="stage_prefix" value="$(arg orchestrator_stage_prefix)"/>
   </node>
 </launch>
