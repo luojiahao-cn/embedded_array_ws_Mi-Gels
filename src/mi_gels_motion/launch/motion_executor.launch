@@ -1,20 +1,23 @@
 <launch>
   <arg name="config_file" default="$(find mi_gels_motion)/config/diana7_line.yaml"/>
+  <arg name="start_robot_stack" default="true"/>
   <arg name="sim" default="true"/>
   <arg name="plan_only" default="false"/>
   <arg name="tool_name" default="magnetometer_array"/>
   <arg name="use_rviz" default="true"/>
   <arg name="use_gui" default="false"/>
   <arg name="move_group_timeout_s" default="120.0"/>
+  <arg name="auto_start" default="true"/>
+  <arg name="run_service_name" default="/mi_gels_motion/run_experiment"/>
 
-  <include if="$(arg sim)"
+  <include if="$(eval arg('start_robot_stack') and arg('sim'))"
            file="$(find zlab_robots_bringup)/launch/diana7/diana7_moveit.launch">
     <arg name="tool_name" value="$(arg tool_name)"/>
     <arg name="use_gui" value="$(arg use_gui)"/>
     <arg name="use_rviz" value="$(arg use_rviz)"/>
   </include>
 
-  <include unless="$(arg sim)"
+  <include if="$(eval arg('start_robot_stack') and not arg('sim'))"
            file="$(find zlab_robots_bringup)/launch/diana7/diana7_bringup.launch">
     <arg name="tool_name" value="$(arg tool_name)"/>
     <arg name="use_rviz" value="$(arg use_rviz)"/>
@@ -24,5 +27,7 @@
     <param name="config_file" value="$(arg config_file)"/>
     <param name="plan_only" value="$(arg plan_only)"/>
     <param name="move_group_timeout_s" value="$(arg move_group_timeout_s)"/>
+    <param name="auto_start" value="$(arg auto_start)"/>
+    <param name="run_service_name" value="$(arg run_service_name)"/>
   </node>
 </launch>

@@ -4,6 +4,7 @@
 import copy
 import math
 import sys
+import threading
 
 import actionlib
 import moveit_commander
@@ -13,6 +14,7 @@ import yaml
 from geometry_msgs.msg import Pose, PoseArray
 from moveit_msgs.msg import DisplayTrajectory, MoveGroupAction, MoveItErrorCodes
 from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest
+from std_srvs.srv import Trigger, TriggerResponse
 
 from mi_gels_motion.moveit_compat import compute_cartesian_path_compat
 from mi_gels_motion.start_policy import active_joint_target_from_solution, requires_move_to_start
@@ -93,6 +95,9 @@ class MotionExecutor:
         config_file = rospy.get_param("~config_file")
         self.config = self._load_config(config_file)
         self.plan_only = _param_bool(rospy.get_param("~plan_only", self.config.get("motion", {}).get("plan_only", True)))
+        self.auto_start = _param_bool(rospy.get_param("~auto_start", True))
+        self.run_service_name = str(rospy.get_param("~run_service_name", "/mi_gels_motion/run_experiment"))
+        self._run_lock = threading.Lock()
 
         self.arm = str(self.config.get("arm", "diana7"))
         self.frame_id = str(self.config.get("frame_id", "world"))
@@ -134,6 +139,8 @@ class MotionExecutor:
         self.compute_ik = rospy.ServiceProxy("/compute_ik", GetPositionIK)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.run_service = rospy.Service(self.run_service_name, Trigger, self.handle_run_experiment)
+        rospy.loginfo("Motion executor service ready: %s", self.run_service_name)
 
     def _load_config(self, config_file):
         with open(config_file, "r", encoding="utf-8") as stream:
@@ -208,7 +215,7 @@ class MotionExecutor:
     def move_to_start(self, start):
         pose = _pose_from_dict(start)
         rospy.loginfo(
-            "Planning move to absolute start pose: position=(%.4f, %.4f, %.4f)",
+            "[MI-GELS Motion] Planning move to absolute start pose: position=(%.4f, %.4f, %.4f)",
             pose.position.x,
             pose.position.y,
             pose.position.z,
@@ -224,11 +231,11 @@ class MotionExecutor:
         ik_response = self.compute_ik(ik_request)
         if ik_response.error_code.val != MoveItErrorCodes.SUCCESS:
             rospy.logerr("Failed to solve IK for absolute start pose; refusing to run Cartesian path.")
-            return False
+            return "failed"
         joint_target = active_joint_target_from_solution(ik_response.solution, self.group.get_active_joints())
         if not joint_target:
             rospy.logerr("IK solution did not include active joints for %s; refusing to run Cartesian path.", self.move_group_name)
-            return False
+            return "failed"
         self.apply_positioning_speed()
         self.group.set_joint_value_target(joint_target)
         result = self.group.plan()
@@ -242,16 +249,17 @@ class MotionExecutor:
         self.group.clear_pose_targets()
         if not success:
             rospy.logerr("Failed to plan move to absolute start pose; refusing to run Cartesian path.")
-            return False
+            return "failed"
         if self.plan_only:
-            rospy.loginfo("Plan-only mode enabled; absolute start pose plan was generated but not executed.")
-            return False
+            rospy.loginfo("[MI-GELS Motion] Plan-only mode: absolute start pose plan generated; no robot motion will be executed.")
+            return "planned"
+        rospy.loginfo("[MI-GELS Motion] Executing move to absolute start pose.")
         self.group.execute(plan, wait=True)
         self.group.stop()
         self.group.clear_pose_targets()
-        rospy.loginfo("Reached absolute start pose.")
+        rospy.loginfo("[MI-GELS Motion] Reached absolute start pose.")
         self.apply_trajectory_speed()
-        return True
+        return "executed"
 
     def current_pose_dict(self):
         rospy.sleep(0.5)
@@ -259,10 +267,14 @@ class MotionExecutor:
         return _pose_to_dict(stamped.pose)
 
     def run(self):
+        rospy.loginfo("[MI-GELS Motion] Motion run started. plan_only=%s", self.plan_only)
         start = self.start_pose()
         if requires_move_to_start(self.config.get("start", {})):
-            if not self.move_to_start(start):
-                return
+            start_result = self.move_to_start(start)
+            if start_result == "failed":
+                return False
+            if start_result == "planned":
+                return True
             if not self.plan_only:
                 start = self.current_pose_dict()
                 rospy.loginfo(
@@ -286,13 +298,14 @@ class MotionExecutor:
             self.plan_only,
         )
 
+        rospy.loginfo("[MI-GELS Motion] Planning Cartesian trajectory.")
         plan, fraction = self.plan(msg.poses)
         rospy.loginfo("Cartesian planning fraction: %.3f", fraction)
         self.publish_display_trajectory(plan)
         min_fraction = float(self.config.get("motion", {}).get("min_fraction", 0.95))
         if fraction < min_fraction:
             rospy.logerr("Planning fraction %.3f below min_fraction %.3f; refusing to execute.", fraction, min_fraction)
-            return
+            return False
 
         if self.trajectory_tcp_speed_mps > 0.0 and length_m > 0.0:
             desired_duration = length_m / self.trajectory_tcp_speed_mps
@@ -306,16 +319,41 @@ class MotionExecutor:
                 rospy.loginfo("MoveIt-retimed plan is already slower than trajectory_tcp_speed_mps target; no stretch applied.")
 
         if self.plan_only:
-            rospy.loginfo("Plan-only mode enabled; plan was generated but not executed.")
-            return
+            rospy.loginfo("[MI-GELS Motion] Plan-only mode: Cartesian trajectory plan generated; no robot motion will be executed.")
+            return True
+        rospy.loginfo("[MI-GELS Motion] Executing Cartesian trajectory now.")
         self.group.execute(plan, wait=True)
         self.group.stop()
         self.group.clear_pose_targets()
-        rospy.loginfo("Motion execution complete.")
+        rospy.loginfo("[MI-GELS Motion] Motion execution complete.")
+        return True
+
+    def handle_run_experiment(self, _request):
+        if not self._run_lock.acquire(False):
+            return TriggerResponse(success=False, message="motion executor is already running")
+        try:
+            rospy.loginfo("[MI-GELS Motion] Service trigger received: %s", self.run_service_name)
+            success = self.run()
+            if success:
+                return TriggerResponse(success=True, message="motion experiment completed")
+            return TriggerResponse(success=False, message="motion experiment failed")
+        except Exception as exc:
+            rospy.logerr("Motion experiment failed: %s", exc)
+            return TriggerResponse(success=False, message=str(exc))
+        finally:
+            self._run_lock.release()
+
+    def spin(self):
+        rospy.loginfo("Auto-start disabled; waiting for service trigger.")
+        rospy.spin()
 
 
 if __name__ == "__main__":
     try:
-        MotionExecutor().run()
+        executor = MotionExecutor()
+        if executor.auto_start:
+            executor.run()
+        else:
+            executor.spin()
     except rospy.ROSInterruptException:
         pass

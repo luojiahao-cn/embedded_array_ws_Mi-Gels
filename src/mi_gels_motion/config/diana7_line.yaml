@@ -10,7 +10,7 @@ start:
   mode: absolute
   tf_frame: diana7_ee_link
   pose:
-    position: {x: 0.50, y: -0.01, z: 1.0}
+    position: {x: 0.55, y: -0.01, z: 1.2}
     orientation: {x: -0.455, y: 0.542, z: -0.542, w: 0.455}
 
 trajectory:

@@ -9,13 +9,22 @@
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <build_depend>rospy</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>signal_generator</build_depend>
+  <build_depend>std_srvs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
   <exec_depend>rqt_image_view</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>sensor_data_collection</exec_depend>
   <exec_depend>serial_processor</exec_depend>
   <exec_depend>signal_generator</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
   <exec_depend>tagslam</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>zed_wrapper</exec_depend>
+  <exec_depend>zlab_robots_bringup</exec_depend>
   <exec_depend>zlab_robots_calibration</exec_depend>
 
   <export>

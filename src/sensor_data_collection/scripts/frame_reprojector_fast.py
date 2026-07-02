@@ -15,13 +15,15 @@ from tf.transformations import quaternion_matrix
 
 class FrameReprojector:
     def __init__(self):
-        rospy.init_node('frame_reprojector_node', anonymous=True)
+        rospy.init_node('frame_reprojector_node')
         
         # 参数获取
         self.image_topic = rospy.get_param('~image_topic', '/zed2i/zed_node/left/image_rect_gray')
         self.camera_info_topic = rospy.get_param('~camera_info_topic', '/zed2i/zed_node/left/camera_info')
-        # 默认使用相机的光学frame，如果传了参数则使用自定义的camera_frame
-        self.camera_frame = rospy.get_param('~camera_frame', 'rig') 
+        # 默认使用 CameraInfo 的光学 frame，如果传了参数则使用自定义的 camera_frame。
+        self.camera_frame = rospy.get_param('~camera_frame', '')
+        self.output_image_topic = rospy.get_param('~output_image_topic', '~reprojected_image')
+        self.last_draw_status = []
         
         # target_frames 格式约定: [{'frame': 'target1', 'type': 'axes', 'length': 0.1}, 
         #                         {'frame': 'target2', 'type': 'point'},
@@ -47,9 +49,14 @@ class FrameReprojector:
         # 订阅与发布
         rospy.Subscriber(self.camera_info_topic, CameraInfo, self.cam_info_cb)
         rospy.Subscriber(self.image_topic, Image, self.image_cb, queue_size=1)
-        self.image_pub = rospy.Publisher('~reprojected_image', Image, queue_size=1)
+        self.image_pub = rospy.Publisher(self.output_image_topic, Image, queue_size=1)
 
-        rospy.loginfo("FrameReprojector initialized. Waiting for image and camera info...")
+        rospy.loginfo(
+            "FrameReprojector initialized. image_topic=%s camera_info_topic=%s output_image_topic=%s",
+            self.image_topic,
+            self.camera_info_topic,
+            self.image_pub.resolved_name,
+        )
 
     def cam_info_cb(self, msg):
         if not self.has_cam_info:
@@ -69,11 +76,18 @@ class FrameReprojector:
                 rospy.Duration(self.tf_timeout_s),
             )
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
-            rospy.logdebug_throttle(
-                1.0,
-                f"TF lookup failed: {self.camera_frame} <- {source_frame}: {e}",
-            )
-            return None
+            message = str(e)
+            if "does not exist" in message:
+                rospy.loginfo_throttle(
+                    2.0,
+                    f"Waiting for TF frame: {self.camera_frame} <- {source_frame}: {e}",
+                )
+            else:
+                rospy.logwarn_throttle(
+                    1.0,
+                    f"TF lookup failed: {self.camera_frame} <- {source_frame}: {e}",
+                )
+            return None, str(e)
 
         tr = transform.transform.translation
         rot = transform.transform.rotation
@@ -81,7 +95,7 @@ class FrameReprojector:
         mat[0, 3] = tr.x
         mat[1, 3] = tr.y
         mat[2, 3] = tr.z
-        return mat
+        return mat, None
 
     def transform_point(self, matrix, xyz):
         pt = matrix.dot([xyz[0], xyz[1], xyz[2], 1.0])
@@ -95,9 +109,9 @@ class FrameReprojector:
 
     def draw_axes(self, cv_image, frame_id, length=0.1):
         """绘制三轴 (RGB = XYZ)"""
-        matrix = self.lookup_frame_matrix(frame_id)
+        matrix, error = self.lookup_frame_matrix(frame_id)
         if matrix is None:
-            return
+            return False, error
 
         origin = self.transform_point(matrix, (0, 0, 0))
         pt_x = self.transform_point(matrix, (length, 0, 0))
@@ -108,44 +122,66 @@ class FrameReprojector:
         uv_x = self.project_point(pt_x)
         uv_y = self.project_point(pt_y)
         uv_z = self.project_point(pt_z)
-        if not all([uv_origin, uv_x, uv_y, uv_z]):
-            return
+        if uv_origin is None:
+            return False, "frame origin projects behind camera"
 
         thickness = 2
-        cv2.line(cv_image, uv_origin, uv_x, (0, 0, 255), thickness) # X轴红色
-        cv2.line(cv_image, uv_origin, uv_y, (0, 255, 0), thickness) # Y轴绿色
-        cv2.line(cv_image, uv_origin, uv_z, (255, 0, 0), thickness) # Z轴蓝色
+        drawn_axis = False
+        if uv_x is not None:
+            cv2.line(cv_image, uv_origin, uv_x, (0, 0, 255), thickness) # X轴红色
+            drawn_axis = True
+        if uv_y is not None:
+            cv2.line(cv_image, uv_origin, uv_y, (0, 255, 0), thickness) # Y轴绿色
+            drawn_axis = True
+        if uv_z is not None:
+            cv2.line(cv_image, uv_origin, uv_z, (255, 0, 0), thickness) # Z轴蓝色
+            drawn_axis = True
+        cv2.circle(cv_image, uv_origin, 4, (255, 255, 255), -1)
         cv2.putText(cv_image, frame_id, uv_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        if not drawn_axis:
+            return True, "only frame origin is visible"
+        return True, None
 
     def draw_z_axis(self, cv_image, frame_id, length=0.1):
         """只绘制单轴 (Z轴为例)"""
-        matrix = self.lookup_frame_matrix(frame_id)
+        matrix, error = self.lookup_frame_matrix(frame_id)
         if matrix is None:
-            return
+            return False, error
 
         origin = self.transform_point(matrix, (0, 0, 0))
         pt_z = self.transform_point(matrix, (0, 0, length))
         uv_origin = self.project_point(origin)
         uv_z = self.project_point(pt_z)
         if not all([uv_origin, uv_z]):
-            return
+            return False, "z-axis endpoint projects behind camera"
 
         cv2.line(cv_image, uv_origin, uv_z, (255, 0, 0), 2)
         cv2.putText(cv_image, f"{frame_id}_Z", uv_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+        return True, None
 
     def draw_point(self, cv_image, frame_id):
         """只绘制单点 (原点)"""
-        matrix = self.lookup_frame_matrix(frame_id)
+        matrix, error = self.lookup_frame_matrix(frame_id)
         if matrix is None:
-            return
+            return False, error
 
         origin = self.transform_point(matrix, (0, 0, 0))
         uv_origin = self.project_point(origin)
         if uv_origin is None:
-            return
+            return False, "point projects behind camera"
 
         cv2.circle(cv_image, uv_origin, 5, (0, 255, 255), -1)
         cv2.putText(cv_image, frame_id, uv_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        return True, None
+
+    def draw_status_overlay(self, cv_image, statuses):
+        if not statuses:
+            return
+
+        y = 24
+        for text in statuses[:5]:
+            cv2.putText(cv_image, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+            y += 24
 
     def image_cb(self, msg):
         if not self.has_cam_info or not self.camera_frame:
@@ -158,6 +194,8 @@ class FrameReprojector:
             return
 
         # 遍历要投射的坐标系配置进行渲染
+        statuses = []
+        drawn_count = 0
         for target in self.target_frames:
             frame_id = target.get('frame')
             draw_type = target.get('type', 'axes')
@@ -167,11 +205,21 @@ class FrameReprojector:
                 continue
 
             if draw_type == 'axes':
-                self.draw_axes(cv_image, frame_id, length)
+                drawn, error = self.draw_axes(cv_image, frame_id, length)
             elif draw_type == 'z_axis':
-                self.draw_z_axis(cv_image, frame_id, length)
+                drawn, error = self.draw_z_axis(cv_image, frame_id, length)
             elif draw_type == 'point':
-                self.draw_point(cv_image, frame_id)
+                drawn, error = self.draw_point(cv_image, frame_id)
+            else:
+                drawn, error = False, f"unknown draw type {draw_type}"
+
+            if drawn:
+                drawn_count += 1
+            else:
+                statuses.append(f"No {frame_id}: {error}")
+
+        if drawn_count == 0:
+            self.draw_status_overlay(cv_image, [f"No projected frames for camera_frame={self.camera_frame}"] + statuses)
 
         # 发布画好的图像
         try:

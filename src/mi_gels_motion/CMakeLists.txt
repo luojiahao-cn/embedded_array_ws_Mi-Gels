@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_msgs
   rospy
   std_msgs
+  std_srvs
   tf2_geometry_msgs
   tf2_ros
   trajectory_msgs
@@ -23,6 +24,7 @@ catkin_package(
     moveit_msgs
     rospy
     std_msgs
+    std_srvs
     tf2_geometry_msgs
     tf2_ros
     trajectory_msgs

@@ -22,7 +22,9 @@
   <arg name="image_topic" default="/zed2i/zed_node/left/image_rect_gray"/>
   <!-- 相机内参话题 -->
   <arg name="camera_info_topic" default="/zed2i/zed_node/left/camera_info"/>
-  <!-- 相机坐标系名称 -->
+  <!-- 重投影图像输出话题 -->
+  <arg name="reprojected_image_topic" default="/mi_gels/reprojected_image"/>
+  <!-- TagSLAM 相机模型坐标系名称 -->
   <arg name="camera_frame" default="cam0"/>
   <!-- 图像传输模式：raw 表示未压缩 -->
   <arg name="transport" default="raw"/>
@@ -43,13 +45,13 @@
   <!-- TF 变换超时时间（秒） -->
   <arg name="reprojector_tf_timeout_s" default="0.005"/>
   <!-- 是否显示重投影窗口 -->
-  <arg name="show_reprojector_window" default="false"/>
+  <arg name="show_reprojector_window" default="true"/>
   <!-- 是否显示原始图像 -->
-  <arg name="show_raw_image" default="false"/>
+  <arg name="show_raw_image" default="true"/>
   <!-- 是否显示 AprilTag 检测结果图像 -->
-  <arg name="show_detector_image" default="false"/>
+  <arg name="show_detector_image" default="true"/>
   <!-- 是否显示重投影图像（将 TF 坐标系投影到图像上） -->
-  <arg name="show_reprojected_image" default="false"/>
+  <arg name="show_reprojected_image" default="true"/>
 
   <!-- 启动 ZED2i 相机节点 -->
   <include file="$(find mi_gels_bringup)/launch/zed2i_camera.launch">
@@ -100,11 +102,12 @@
     Frame Reprojector 节点：将机器人末端和传感器阵列的 TF 坐标系投影到相机图像上
     用于可视化和实时检查各坐标系在图像中的位置
   -->
-  <node if="$(eval arg('show_reprojector_window') == 'true' or arg('show_reprojected_image') == 'true')"
+  <node if="$(eval arg('show_reprojector_window') or arg('show_reprojected_image'))"
         pkg="sensor_data_collection" type="frame_reprojector_fast.py"
-        name="frame_reprojector_node" output="log">
+        name="frame_reprojector_node" output="screen">
     <param name="image_topic" value="$(arg image_topic)"/>
     <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+    <param name="output_image_topic" value="$(arg reprojected_image_topic)"/>
     <param name="camera_frame" value="$(arg camera_frame)"/>
     <param name="tf_timeout_s" value="$(arg reprojector_tf_timeout_s)"/>
     <rosparam param="target_frames">
@@ -131,7 +134,7 @@
 
   <!-- 重投影图像查看器：显示坐标系在图像上的投影（可选） -->
   <node if="$(arg show_reprojected_image)" name="mi_gels_reprojected_image_view" pkg="rqt_image_view"
-        type="rqt_image_view" output="screen" args="--clear-config /frame_reprojector_node/reprojected_image">
-    <remap from="image" to="/frame_reprojector_node/reprojected_image"/>
+        type="rqt_image_view" output="screen" args="--clear-config $(arg reprojected_image_topic)">
+    <remap from="image" to="$(arg reprojected_image_topic)"/>
   </node>
 </launch>
