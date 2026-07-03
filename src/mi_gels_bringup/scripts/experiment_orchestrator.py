@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Coordinate MI-GELS experiment startup before triggering robot motion."""
 
+import json
 import math
+import os
 import time
 
 import rospy
@@ -36,6 +38,68 @@ def _expected_signal_channels(config):
             "output_enabled": bool(item.get("output_en", False)),
         }
     return channels
+
+
+def _runtime_float(value, config, key, default):
+    if isinstance(value, str) and value.strip().lower() == "runtime":
+        value = config.get(key, default)
+    return float(value)
+
+
+def _param_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _bytes_from_image_data(data):
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    return bytes(bytearray(data))
+
+
+def _row_slice(data, offset, width):
+    return data[offset:offset + width]
+
+
+def save_ros_image(image, path_stem):
+    encoding = str(getattr(image, "encoding", "")).lower()
+    width = int(image.width)
+    height = int(image.height)
+    step = int(getattr(image, "step", 0))
+    data = _bytes_from_image_data(image.data)
+    if width <= 0 or height <= 0:
+        raise ValueError("Image has invalid size: {}x{}".format(width, height))
+
+    if encoding in ("mono8", "8uc1"):
+        row_width = width
+        step = step or row_width
+        payload = b"".join(_row_slice(data, row * step, row_width) for row in range(height))
+        path = path_stem + ".pgm"
+        with open(path, "wb") as stream:
+            stream.write("P5\n{} {}\n255\n".format(width, height).encode("ascii"))
+            stream.write(payload)
+        return path
+
+    if encoding in ("rgb8", "bgr8"):
+        row_width = width * 3
+        step = step or row_width
+        rows = []
+        for row in range(height):
+            row_data = bytearray(_row_slice(data, row * step, row_width))
+            if encoding == "bgr8":
+                for index in range(0, len(row_data), 3):
+                    row_data[index], row_data[index + 2] = row_data[index + 2], row_data[index]
+            rows.append(bytes(row_data))
+        path = path_stem + ".ppm"
+        with open(path, "wb") as stream:
+            stream.write("P6\n{} {}\n255\n".format(width, height).encode("ascii"))
+            stream.write(b"".join(rows))
+        return path
+
+    raise ValueError("Unsupported image encoding for experiment photo: {}".format(image.encoding))
 
 
 def _close(actual, expected, tolerance):
@@ -86,11 +150,15 @@ class ExperimentOrchestrator:
         self.run_trajectory_service = rospy.get_param("~run_trajectory_service", "/mi_gels_motion/run_trajectory")
         self.record_trigger_topic = rospy.get_param("~record_trigger_topic", "/maggrad_continuous_collection/record_trigger")
         self.record_status_topic = rospy.get_param("~record_status_topic", "/maggrad/continuous_record/status")
+        self.camera_snapshot_topic = rospy.get_param("~camera_snapshot_topic", self.camera_image_topic)
+        self.capture_experiment_photos = _param_bool(rospy.get_param("~capture_experiment_photos", True))
+        self.photo_before_motion_name = rospy.get_param("~photo_before_motion_name", "before_motion")
+        self.photo_after_motion_name = rospy.get_param("~photo_after_motion_name", "after_motion")
         self.timeout_s = float(rospy.get_param("~timeout_s", 120.0))
         self.settle_time_s = float(rospy.get_param("~settle_time_s", 2.0))
         self.initial_settle_time_s = float(rospy.get_param("~initial_settle_time_s", self.settle_time_s))
         self.pre_motion_cycles = int(rospy.get_param("~pre_motion_cycles", 5))
-        self.coil_frequency_hz = float(rospy.get_param("~coil_frequency_hz", 1.0))
+        coil_frequency_param = rospy.get_param("~coil_frequency_hz", "runtime")
         self.frequency_tolerance = float(rospy.get_param("~frequency_tolerance", 0.01))
         self.voltage_tolerance = float(rospy.get_param("~voltage_tolerance", 0.05))
         self.phase_tolerance = float(rospy.get_param("~phase_tolerance", 0.5))
@@ -98,9 +166,16 @@ class ExperimentOrchestrator:
         self.signal_status_prefix = rospy.get_param("~signal_status_prefix", "/fy8300")
         self.stage_prefix = rospy.get_param("~stage_prefix", "[MI-GELS]")
 
-        self.signal_expected = _expected_signal_channels(_load_yaml(self.signal_config))
+        self.signal_config_data = _load_yaml(self.signal_config)
+        self.signal_expected = _expected_signal_channels(self.signal_config_data)
         if not self.signal_expected:
             raise ValueError("No initial_configs found in signal config: {}".format(self.signal_config))
+        self.coil_frequency_hz = _runtime_float(
+            coil_frequency_param,
+            self.signal_config_data,
+            "coil_frequency_hz",
+            1.0,
+        )
         self.tolerances = {
             "frequency": self.frequency_tolerance,
             "amplitude": self.voltage_tolerance,
@@ -221,6 +296,23 @@ class ExperimentOrchestrator:
             timeout=self._remaining_timeout(deadline),
         )
 
+    def wait_for_recording_path(self, deadline):
+        while not rospy.is_shutdown():
+            msg = rospy.wait_for_message(
+                self.record_status_topic,
+                String,
+                timeout=self._remaining_timeout(deadline),
+            )
+            try:
+                status = json.loads(msg.data)
+            except ValueError:
+                rospy.logwarn("%s: invalid recording status JSON: %s", self.stage(5, "Waiting for recording path"), msg.data)
+                continue
+            path = status.get("path")
+            if status.get("recording") and path:
+                return os.path.dirname(os.path.expanduser(path))
+        raise RuntimeError("Shutdown while waiting for recording path")
+
     def call_trigger_service(self, service_name, deadline, label):
         rospy.loginfo("%s: %s", self.stage(4, "Waiting for {}".format(label)), service_name)
         rospy.wait_for_service(service_name, timeout=self._remaining_timeout(deadline))
@@ -237,9 +329,25 @@ class ExperimentOrchestrator:
     def pre_motion_wait_s(self):
         return float(self.pre_motion_cycles) / self.coil_frequency_hz
 
+    def capture_experiment_photo(self, directory, name, deadline):
+        if not self.capture_experiment_photos:
+            return None
+        if not directory:
+            raise RuntimeError("Cannot capture experiment photo without a recording directory")
+        os.makedirs(directory, exist_ok=True)
+        image = rospy.wait_for_message(
+            self.camera_snapshot_topic,
+            Image,
+            timeout=self._remaining_timeout(deadline),
+        )
+        path = save_ros_image(image, os.path.join(directory, name))
+        rospy.loginfo("%s: %s", self.stage(5, "Saved experiment photo"), path)
+        return path
+
     def run_experiment_sequence(self, deadline):
         recording_started = False
         signal_enabled = False
+        recording_dir = None
         try:
             self.call_trigger_service(self.prepare_start_service, deadline, "prepare_start")
             settle_deadline = deadline
@@ -258,6 +366,8 @@ class ExperimentOrchestrator:
                 rospy.sleep(remaining_settle_s)
             self.set_recording(True)
             recording_started = True
+            if self.capture_experiment_photos:
+                recording_dir = self.wait_for_recording_path(deadline)
             wait_s = self.pre_motion_wait_s()
             if wait_s > 0.0:
                 rospy.loginfo(
@@ -268,7 +378,9 @@ class ExperimentOrchestrator:
                     wait_s,
                 )
                 rospy.sleep(wait_s)
+            self.capture_experiment_photo(recording_dir, self.photo_before_motion_name, deadline)
             self.call_trigger_service(self.run_trajectory_service, deadline, "run_trajectory")
+            self.capture_experiment_photo(recording_dir, self.photo_after_motion_name, deadline)
         finally:
             if recording_started:
                 self.set_recording(False)

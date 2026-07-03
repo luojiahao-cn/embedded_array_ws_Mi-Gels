@@ -9,7 +9,7 @@ tf_frames:
   - "arm1_em_tcp_filt"
   - "arm2_em_tcp_filt"
 
-coil_frequency_hz: 1.0
+coil_frequency_hz: 0.2
 default_amplitude_v: 5.0
 default_offset_v: 2.5
 

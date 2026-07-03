@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -137,6 +139,7 @@ class ExperimentOrchestratorTest(unittest.TestCase):
         orchestrator.prepare_start_service = "/mi_gels_motion/prepare_start"
         orchestrator.run_trajectory_service = "/mi_gels_motion/run_trajectory"
         orchestrator.record_trigger_topic = "/maggrad_continuous_collection/record_trigger"
+        orchestrator.record_status_topic = "/maggrad/continuous_record/status"
         orchestrator.signal_status_prefix = "/fy8300"
         orchestrator.signal_expected = {
             1: {
@@ -177,6 +180,10 @@ class ExperimentOrchestratorTest(unittest.TestCase):
         orchestrator.initial_settle_time_s = 2.0
         orchestrator.pre_motion_cycles = 5
         orchestrator.coil_frequency_hz = 1.0
+        orchestrator.capture_experiment_photos = False
+        orchestrator.camera_snapshot_topic = "/zed2i/zed_node/left/image_rect_gray"
+        orchestrator.photo_before_motion_name = "before_motion"
+        orchestrator.photo_after_motion_name = "after_motion"
         orchestrator.stage_prefix = "[MI-GELS]"
         orchestrator._remaining_timeout = lambda _deadline: 10.0
         orchestrator.record_trigger_pub = module.rospy.Publisher(
@@ -249,6 +256,44 @@ class ExperimentOrchestratorTest(unittest.TestCase):
                 ("publish", "/fy8300/ch3/output_en", False),
             ],
         )
+
+    def test_run_sequence_saves_before_and_after_motion_photos_in_recording_dir(self):
+        rospy = FakeRospy()
+        module = load_orchestrator(rospy)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_path = os.path.join(tmpdir, "maggrad_continuous_20260703_120000.csv")
+            rospy.messages = [
+                ReadyStatus(0.0),
+                ReadyStatus(90.0),
+                ReadyStatus(180.0),
+                types.SimpleNamespace(data='{"recording": true, "path": "' + data_path + '"}'),
+                types.SimpleNamespace(width=2, height=1, encoding="mono8", step=2, data=bytes([1, 2])),
+                types.SimpleNamespace(width=2, height=1, encoding="mono8", step=2, data=bytes([3, 4])),
+            ]
+            orchestrator = self.make_orchestrator(module)
+            orchestrator.capture_experiment_photos = True
+
+            orchestrator.run_experiment_sequence(9999999999.0)
+
+            self.assertEqual(
+                [event for event in rospy.events if event[0] == "wait_for_message"],
+                [
+                    ("wait_for_message", "/fy8300/ch1/status"),
+                    ("wait_for_message", "/fy8300/ch2/status"),
+                    ("wait_for_message", "/fy8300/ch3/status"),
+                    ("wait_for_message", "/maggrad/continuous_record/status"),
+                    ("wait_for_message", "/zed2i/zed_node/left/image_rect_gray"),
+                    ("wait_for_message", "/zed2i/zed_node/left/image_rect_gray"),
+                ],
+            )
+            before_path = os.path.join(tmpdir, "before_motion.pgm")
+            after_path = os.path.join(tmpdir, "after_motion.pgm")
+            self.assertTrue(os.path.exists(before_path))
+            self.assertTrue(os.path.exists(after_path))
+            with open(before_path, "rb") as stream:
+                self.assertEqual(stream.read(), b"P5\n2 1\n255\n\x01\x02")
+            with open(after_path, "rb") as stream:
+                self.assertEqual(stream.read(), b"P5\n2 1\n255\n\x03\x04")
 
     def test_run_sequence_does_not_record_when_signal_never_becomes_ready(self):
         rospy = FakeRospy()
@@ -334,6 +379,14 @@ class ExperimentOrchestratorTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "status.valid is false"):
             orchestrator.wait_for_signal_generator(0.0)
+
+    def test_runtime_float_uses_config_value_when_param_is_runtime(self):
+        rospy = FakeRospy()
+        module = load_orchestrator(rospy)
+
+        value = module._runtime_float("runtime", {"coil_frequency_hz": 0.2}, "coil_frequency_hz", 1.0)
+
+        self.assertEqual(value, 0.2)
 
 
 if __name__ == "__main__":

@@ -97,6 +97,8 @@ class MotionExecutor:
         self.plan_only = _param_bool(rospy.get_param("~plan_only", self.config.get("motion", {}).get("plan_only", True)))
         self.auto_start = _param_bool(rospy.get_param("~auto_start", True))
         self.run_service_name = str(rospy.get_param("~run_service_name", "/mi_gels_motion/run_experiment"))
+        self.prepare_start_service_name = str(rospy.get_param("~prepare_start_service_name", "/mi_gels_motion/prepare_start"))
+        self.run_trajectory_service_name = str(rospy.get_param("~run_trajectory_service_name", "/mi_gels_motion/run_trajectory"))
         self._run_lock = threading.Lock()
 
         self.arm = str(self.config.get("arm", "diana7"))
@@ -139,8 +141,23 @@ class MotionExecutor:
         self.compute_ik = rospy.ServiceProxy("/compute_ik", GetPositionIK)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        self.prepare_start_service = rospy.Service(
+            self.prepare_start_service_name,
+            Trigger,
+            self.handle_prepare_start,
+        )
+        self.run_trajectory_service = rospy.Service(
+            self.run_trajectory_service_name,
+            Trigger,
+            self.handle_run_trajectory,
+        )
         self.run_service = rospy.Service(self.run_service_name, Trigger, self.handle_run_experiment)
-        rospy.loginfo("Motion executor service ready: %s", self.run_service_name)
+        rospy.loginfo(
+            "Motion executor services ready: prepare=%s trajectory=%s run=%s",
+            self.prepare_start_service_name,
+            self.run_trajectory_service_name,
+            self.run_service_name,
+        )
 
     def _load_config(self, config_file):
         with open(config_file, "r", encoding="utf-8") as stream:
@@ -266,24 +283,27 @@ class MotionExecutor:
         stamped = self.group.get_current_pose(self.ee_link)
         return _pose_to_dict(stamped.pose)
 
-    def run(self):
-        rospy.loginfo("[MI-GELS Motion] Motion run started. plan_only=%s", self.plan_only)
+    def prepare_start(self):
         start = self.start_pose()
         if requires_move_to_start(self.config.get("start", {})):
             start_result = self.move_to_start(start)
             if start_result == "failed":
                 return False
-            if start_result == "planned":
-                return True
-            if not self.plan_only:
-                start = self.current_pose_dict()
-                rospy.loginfo(
-                    "Using reached start pose for Cartesian path: position=(%.4f, %.4f, %.4f)",
-                    start["position"]["x"],
-                    start["position"]["y"],
-                    start["position"]["z"],
-                )
+        else:
+            rospy.loginfo("[MI-GELS Motion] Config uses current pose as start; no start move required.")
+        return True
 
+    def run_trajectory_from_current(self):
+        start = self.current_pose_dict()
+        rospy.loginfo(
+            "Using current pose for Cartesian path: position=(%.4f, %.4f, %.4f)",
+            start["position"]["x"],
+            start["position"]["y"],
+            start["position"]["z"],
+        )
+        return self._run_trajectory(start)
+
+    def _run_trajectory(self, start):
         waypoints = generate_waypoints(self.config.get("trajectory", {}), start)
         msg = _dict_to_pose_array(self.frame_id, waypoints)
         self.waypoint_pub.publish(msg)
@@ -328,20 +348,46 @@ class MotionExecutor:
         rospy.loginfo("[MI-GELS Motion] Motion execution complete.")
         return True
 
-    def handle_run_experiment(self, _request):
+    def run(self):
+        rospy.loginfo("[MI-GELS Motion] Motion run started. plan_only=%s", self.plan_only)
+        start = self.start_pose()
+        if requires_move_to_start(self.config.get("start", {})):
+            start_result = self.move_to_start(start)
+            if start_result == "failed":
+                return False
+            if not self.plan_only:
+                start = self.current_pose_dict()
+                rospy.loginfo(
+                    "Using reached start pose for Cartesian path: position=(%.4f, %.4f, %.4f)",
+                    start["position"]["x"],
+                    start["position"]["y"],
+                    start["position"]["z"],
+                )
+        return self._run_trajectory(start)
+
+    def _run_locked(self, label, callback):
         if not self._run_lock.acquire(False):
             return TriggerResponse(success=False, message="motion executor is already running")
         try:
-            rospy.loginfo("[MI-GELS Motion] Service trigger received: %s", self.run_service_name)
-            success = self.run()
+            rospy.loginfo("[MI-GELS Motion] Service trigger received: %s", label)
+            success = callback()
             if success:
-                return TriggerResponse(success=True, message="motion experiment completed")
-            return TriggerResponse(success=False, message="motion experiment failed")
+                return TriggerResponse(success=True, message=f"{label} completed")
+            return TriggerResponse(success=False, message=f"{label} failed")
         except Exception as exc:
-            rospy.logerr("Motion experiment failed: %s", exc)
+            rospy.logerr("%s failed: %s", label, exc)
             return TriggerResponse(success=False, message=str(exc))
         finally:
             self._run_lock.release()
+
+    def handle_prepare_start(self, _request):
+        return self._run_locked("prepare_start", self.prepare_start)
+
+    def handle_run_trajectory(self, _request):
+        return self._run_locked("run_trajectory", self.run_trajectory_from_current)
+
+    def handle_run_experiment(self, _request):
+        return self._run_locked("motion experiment", self.run)
 
     def spin(self):
         rospy.loginfo("Auto-start disabled; waiting for service trigger.")

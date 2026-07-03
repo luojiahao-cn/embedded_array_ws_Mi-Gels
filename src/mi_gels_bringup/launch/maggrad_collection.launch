@@ -10,15 +10,16 @@
   <arg name="port" default="runtime"/>
   <arg name="baudrate" default="runtime"/>
   <arg name="hardware_config" default="runtime"/>
-  <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data/maggrad_continuous"/>
   <arg name="startup_strategy" default="runtime"/>
   <arg name="startup_sensors" default="runtime"/>
   <arg name="startup_profile" default="runtime"/>
   <arg name="icm_rate_hz" default="runtime"/>
   <arg name="trigger_rate_hz" default="runtime"/>
   <arg name="n_sensors" default="runtime"/>
-  <arg name="collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
-  <arg name="signal_config" default="$(find mi_gels_bringup)/config/signal/signal_params_maggrad_continuous.yaml"/>
+  <arg name="experiment_config" default="$(find mi_gels_bringup)/config/experiment/maggrad_continuous.yaml"/>
+  <arg name="collection_config" default="$(arg experiment_config)"/>
+  <arg name="signal_config" default="$(arg experiment_config)"/>
   <arg name="tagslam_config_file" default="$(find sensor_data_collection)/config/tagslam_migels.yaml"/>
   <arg name="record_tf" default="true"/>
   <arg name="tf_reference_frame" default="lab_table"/>

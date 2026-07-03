@@ -15,13 +15,13 @@
       rostopic pub /maggrad_continuous_collection/record_trigger std_msgs/Bool "data: false" -1
 
     Output:
-      $(arg output_dir)/maggrad_continuous_*.csv
+      $(arg output_dir)/maggrad_continuous_YYYYmmdd_HHMMSS/
   -->
 
   <arg name="port" default="runtime"/>
   <arg name="baudrate" default="runtime"/>
   <arg name="hardware_config" default="runtime"/>
-  <arg name="output_dir" default="$(find sensor_data_collection)/../../data"/>
+  <arg name="output_dir" default="$(find sensor_data_collection)/../../data/maggrad_continuous"/>
   <arg name="startup_strategy" default="runtime"/>
   <arg name="startup_sensors" default="runtime"/>
   <arg name="startup_profile" default="runtime"/>

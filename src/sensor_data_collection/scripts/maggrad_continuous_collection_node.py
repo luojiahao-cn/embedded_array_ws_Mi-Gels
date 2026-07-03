@@ -50,7 +50,16 @@ class ContinuousRecorder:
         self.stop()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "jsonl" if self.record_format == "jsonl" else "csv"
-        self.path = os.path.join(self.output_dir, f"maggrad_continuous_{ts}.{ext}")
+        base_run_name = f"maggrad_continuous_{ts}"
+        run_name = base_run_name
+        run_dir = os.path.join(self.output_dir, run_name)
+        suffix = 1
+        while os.path.exists(run_dir):
+            run_name = f"{base_run_name}_{suffix:03d}"
+            run_dir = os.path.join(self.output_dir, run_name)
+            suffix += 1
+        os.makedirs(run_dir, exist_ok=True)
+        self.path = os.path.join(run_dir, f"{run_name}.{ext}")
         self.rows_written = 0
         self.file = open(self.path, "w", newline="")
         if ext == "csv":
@@ -88,26 +97,9 @@ class ContinuousRecorder:
 
     def _csv_header(self):
         header = [
-            "experiment_id",
-            "sensor_type",
-            "board",
-            "profile",
-            "mag_rate_hz",
-            "icm_rate_hz",
-            "coil_current_a",
-            "fy8300_voltage_v",
-            "current_at_5v_a",
-            "estimated_current_a",
-            "current_mapping",
-            "rotation_run_id",
-            "firmware_status",
-            "warning",
-            "ak_bitmap",
-            "ak_count",
             "pc_time",
             "ak_seq",
             "ak_tick_ms",
-            "ak_topic",
             "coil_state",
             "coil_channel",
             "coil_state_index",
@@ -165,28 +157,10 @@ class ContinuousRecorder:
         coil = record["coil"]
         imu_raw = record.get("imu_raw") or {}
         imu = record.get("imu") or {}
-        meta = record.get("experiment") or {}
         row = [
-            meta.get("experiment_id", ""),
-            meta.get("sensor_type", ""),
-            meta.get("board", ""),
-            meta.get("profile", ""),
-            meta.get("mag_rate_hz", ""),
-            meta.get("icm_rate_hz", ""),
-            meta.get("coil_current_a", ""),
-            meta.get("fy8300_voltage_v", ""),
-            meta.get("current_at_5v_a", ""),
-            meta.get("estimated_current_a", ""),
-            meta.get("current_mapping", ""),
-            meta.get("rotation_run_id", ""),
-            meta.get("firmware_status", ""),
-            meta.get("warning", ""),
-            meta.get("ak_bitmap", ""),
-            meta.get("ak_count", ""),
             f"{record['pc_time']:.9f}",
             record["ak_seq"],
             record["ak_tick_ms"],
-            record["ak_topic"],
             coil["name"],
             coil["channel"],
             coil["index"],
@@ -256,7 +230,7 @@ class MagGradContinuousCollectionNode:
         else:
             self.n_sensors = int(resolve_runtime_value(n_sensors_param, "n_sensors", 12))
         default_output_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "..", "data")
+            os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "maggrad_continuous")
         )
         self.output_dir = rospy.get_param(
             "~output_dir",
@@ -384,6 +358,7 @@ class MagGradContinuousCollectionNode:
             "estimated_current_a": rospy.get_param("~estimated_current_a", ""),
             "current_mapping": rospy.get_param("~current_mapping", ""),
             "coil_channel": rospy.get_param("~coil_channel", ""),
+            "ak_topic": self.ak_topic,
             "rotation_run_id": rospy.get_param("~rotation_run_id", ""),
             "firmware_status": rospy.get_param("~firmware_status", ""),
             "warning": rospy.get_param("~warning", "NONE"),
@@ -459,6 +434,8 @@ class MagGradContinuousCollectionNode:
         with self.lock:
             enable = bool(msg.data)
             if enable and not self.recording:
+                runtime_metadata = self._runtime_experiment_metadata()
+                self.recorder.experiment_metadata = runtime_metadata
                 self.recorder.start()
                 self.recording = True
                 self.record_start_time = rospy.Time.now()

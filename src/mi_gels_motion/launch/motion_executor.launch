@@ -9,6 +9,8 @@
   <arg name="move_group_timeout_s" default="120.0"/>
   <arg name="auto_start" default="true"/>
   <arg name="run_service_name" default="/mi_gels_motion/run_experiment"/>
+  <arg name="prepare_start_service_name" default="/mi_gels_motion/prepare_start"/>
+  <arg name="run_trajectory_service_name" default="/mi_gels_motion/run_trajectory"/>
 
   <include if="$(eval arg('start_robot_stack') and arg('sim'))"
            file="$(find zlab_robots_bringup)/launch/diana7/diana7_moveit.launch">
@@ -29,5 +31,7 @@
     <param name="move_group_timeout_s" value="$(arg move_group_timeout_s)"/>
     <param name="auto_start" value="$(arg auto_start)"/>
     <param name="run_service_name" value="$(arg run_service_name)"/>
+    <param name="prepare_start_service_name" value="$(arg prepare_start_service_name)"/>
+    <param name="run_trajectory_service_name" value="$(arg run_trajectory_service_name)"/>
   </node>
 </launch>

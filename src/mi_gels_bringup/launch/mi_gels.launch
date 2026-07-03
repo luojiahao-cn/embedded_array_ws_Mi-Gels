@@ -22,6 +22,9 @@
   <arg name="start_motion_executor" default="true"/>
   <arg name="start_experiment_orchestrator" default="true"/>
   <arg name="start_data_recording" default="true"/>
+  <arg name="experiment_config" default="$(find mi_gels_bringup)/config/experiment/maggrad_continuous.yaml"/>
+  <arg name="signal_config" default="$(arg experiment_config)"/>
+  <arg name="record_collection_config" default="$(arg experiment_config)"/>
 
   <include if="$(arg start_apriltag_tracking)"
            file="$(find mi_gels_bringup)/launch/apriltag_tracking.launch"/>
@@ -31,7 +34,9 @@
 
   <!-- FY8300 节点可提前启动，output_en 由 experiment_orchestrator 在起点稳定阶段托管。 -->
   <include if="$(arg start_signal_generator)"
-           file="$(find mi_gels_bringup)/launch/fy8300_signal.launch"/>
+           file="$(find mi_gels_bringup)/launch/fy8300_signal.launch">
+    <arg name="signal_config" value="$(arg signal_config)"/>
+  </include>
 
 
   <arg name="robot_sim" default="false"/>
@@ -43,13 +48,8 @@
   <arg name="motion_run_service" default="/mi_gels_motion/run_experiment"/>
   <arg name="motion_prepare_start_service" default="/mi_gels_motion/prepare_start"/>
   <arg name="motion_run_trajectory_service" default="/mi_gels_motion/run_trajectory"/>
-  <arg name="signal_config" default="$(find mi_gels_bringup)/config/signal/signal_params_maggrad_continuous.yaml"/>
-  <arg name="record_output_dir" default="$(find sensor_data_collection)/../../data"/>
-  <arg name="record_collection_config" default="$(find sensor_data_collection)/config/maggrad_continuous_collection.yaml"/>
+  <arg name="record_output_dir" default="$(find sensor_data_collection)/../../data/maggrad_continuous"/>
   <arg name="record_hardware_config" default="runtime"/>
-  <arg name="record_n_sensors" default="runtime"/>
-  <arg name="record_tf" default="true"/>
-  <arg name="record_tf_reference_frame" default="lab_table"/>
   <arg name="record_experiment_id" default=""/>
   <arg name="record_sensor_type" default=""/>
   <arg name="record_board" default=""/>
@@ -67,9 +67,13 @@
   <arg name="orchestrator_pre_motion_cycles" default="5"/>
   <arg name="orchestrator_record_trigger_topic" default="/maggrad_continuous_collection/record_trigger"/>
   <arg name="orchestrator_record_status_topic" default="/maggrad/continuous_record/status"/>
-  <arg name="orchestrator_coil_frequency_hz" default="1.0"/>
+  <arg name="orchestrator_coil_frequency_hz" default="runtime"/>
   <arg name="orchestrator_camera_image_topic" default="/zed2i/zed_node/left/image_rect_gray"/>
   <arg name="orchestrator_camera_info_topic" default="/zed2i/zed_node/left/camera_info"/>
+  <arg name="orchestrator_capture_experiment_photos" default="true"/>
+  <arg name="orchestrator_camera_snapshot_topic" default="$(arg orchestrator_camera_image_topic)"/>
+  <arg name="orchestrator_photo_before_motion_name" default="before_motion"/>
+  <arg name="orchestrator_photo_after_motion_name" default="after_motion"/>
   <arg name="orchestrator_signal_status_prefix" default="/fy8300"/>
   <arg name="orchestrator_stage_prefix" default="[MI-GELS]"/>
 
@@ -94,10 +98,6 @@
     <rosparam file="$(arg record_collection_config)" command="load"/>
     <param name="output_dir" value="$(arg record_output_dir)"/>
     <param name="hardware_config" value="$(arg record_hardware_config)"/>
-    <param name="n_sensors" value="$(arg record_n_sensors)"/>
-    <param name="record_tf" value="$(arg record_tf)"/>
-    <param name="tf_reference_frame" value="$(arg record_tf_reference_frame)"/>
-    <param name="coil_frequency_hz" value="$(arg orchestrator_coil_frequency_hz)"/>
     <param name="experiment_id" value="$(arg record_experiment_id)"/>
     <param name="sensor_type" value="$(arg record_sensor_type)"/>
     <param name="board" value="$(arg record_board)"/>
@@ -126,6 +126,10 @@
     <param name="run_trajectory_service" value="$(arg motion_run_trajectory_service)"/>
     <param name="record_trigger_topic" value="$(arg orchestrator_record_trigger_topic)"/>
     <param name="record_status_topic" value="$(arg orchestrator_record_status_topic)"/>
+    <param name="capture_experiment_photos" value="$(arg orchestrator_capture_experiment_photos)"/>
+    <param name="camera_snapshot_topic" value="$(arg orchestrator_camera_snapshot_topic)"/>
+    <param name="photo_before_motion_name" value="$(arg orchestrator_photo_before_motion_name)"/>
+    <param name="photo_after_motion_name" value="$(arg orchestrator_photo_after_motion_name)"/>
     <param name="timeout_s" value="$(arg orchestrator_timeout_s)"/>
     <param name="initial_settle_time_s" value="$(arg orchestrator_initial_settle_time_s)"/>
     <param name="pre_motion_cycles" value="$(arg orchestrator_pre_motion_cycles)"/>

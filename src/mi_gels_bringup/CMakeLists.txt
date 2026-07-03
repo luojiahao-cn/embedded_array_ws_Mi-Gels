@@ -5,6 +5,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   signal_generator
+  std_msgs
   std_srvs
 )
 
@@ -13,6 +14,7 @@ catkin_package(
     rospy
     sensor_msgs
     signal_generator
+    std_msgs
     std_srvs
 )
 
